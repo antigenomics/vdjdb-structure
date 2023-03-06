@@ -18,12 +18,27 @@ select = dplyr::select
 
 ```{r}
 data <- read_tsv("vdjdb-2022-03-30/vdjdb_full.txt") %>%
+  mutate(meta.structure.id = toupper(meta.structure.id)) %>%
   filter(species == "HomoSapiens") %>%
   select(cdr3.alpha, cdr3.beta, antigen.epitope, meta.structure.id) %>%
   unique %>%
   group_by(antigen.epitope) %>%
   mutate(count = n(), has.structure = any(!is.na(meta.structure.id))) %>%
-  filter(count >= 5 & has.structure)
+  filter(count > 1 & has.structure)
+
+modelled <- read_csv("VDJdb_Models_annotation.csv")
+
+modelled <- with(modelled,
+                 rbind(modelled %>%
+                         mutate(gene = "TRB", cdr3 = 
+                                  cdr3.beta) %>%
+                         select(gene, cdr3),
+                       modelled %>%
+                         mutate(gene = "TRA", cdr3 = 
+                                  cdr3.alpha) %>%
+                         select(gene, cdr3))) %>%
+  mutate(in_model = T) %>%
+  unique
 
 ab_pairs <- with(data, tibble(cdr3.from = 
                                 c(cdr3.alpha, cdr3.beta),
@@ -117,9 +132,11 @@ tibble(cdr3 = c(data$cdr3.alpha, data$cdr3.beta),
 data.ga <- data.g %>%
   left_join(pdb_ids) %>%
   left_join(cluster_ids) %>%
+  left_join(modelled) %>%
   group_by(cdr_cluster) %>%
   mutate(pdb_neigh = any(!is.na(meta.structure.id)),
-         motif_neigh = any(!is.na(motifid)))
+         motif_neigh = any(!is.na(motifid))) %>%
+  ungroup
 ```
 
 ```{r fig.height=4, fig.width=4}
@@ -130,6 +147,8 @@ data.ga %>%
              color ="orange", alpha = 0.5) +
   geom_point(data = data.ga %>% filter(pdb_neigh), 
              color ="red", alpha = 0.5) +
+  geom_point(data = data.ga %>% filter(in_model), 
+             color ="black", shape = "+") +
   geom_text_repel(aes(label = meta.structure.id)) +
   facet_wrap(~gene) +
   theme_void() +
