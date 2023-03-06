@@ -1,2 +1,2 @@
 # vdjdb-structure
-Template-based modelling of TCR:pMHC structures for VDJdb database
+Visualization of known and modeled structures from VDJdb using contact maps

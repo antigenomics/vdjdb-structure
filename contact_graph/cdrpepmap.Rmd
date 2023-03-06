@@ -1,0 +1,125 @@
+---
+title: "Untitled"
+author: "M.S."
+date: '2023-03-01'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(MASS)
+library(ggplot2)
+select = dplyr::select
+```
+
+```{r}
+DIST_CONT <- 4.5
+meta <- read_tsv("out_mir/general.txt.gz") %>%
+  left_join(read_tsv("out_mir/markup.txt.gz")) %>%
+  filter(region.type %in% c("CDR3", "PEPTIDE"))
+coords <- read_tsv("out_mir/resmarkup.txt.gz") %>%
+  left_join(read_tsv("out_mir/cacoord.txt.gz"))
+contacts.ca <- read_tsv("out_mir/cadist.txt.gz")
+contacts <- read_tsv("out_mir/atomdist.txt.gz") %>%
+  filter(dist <= DIST_CONT)
+
+#coords %>%
+#  filter(pdb.id == "5d2l_al2.pdb", chain.id == "R") %>%
+#  arrange(residue.index)
+
+#"NLVPMVATV"
+
+#contacts.ca %>%
+#  filter(pdb.id == "5d2l_al2.pdb", chain.id.to == "R")
+
+"CASSLAPGTTNEKLFF"
+```
+
+```{r}
+get_coords <- function(id, antigen,
+                       cdr3a, cdr3b) {
+  set.seed(42)
+  
+  cc <- coords %>%
+    filter(pdb.id == id)
+  
+  dat.coords <- rbind(
+    right_join(cc, meta %>% filter(region.sequence == cdr3b)) %>%
+      mutate(region.type = paste("TRB", region.type)),
+    right_join(cc, meta %>% filter(region.sequence == cdr3a)) %>%
+      mutate(region.type = paste("TRA", region.type)),
+    right_join(cc, meta %>% filter(region.sequence == antigen))
+    ) %>%
+    group_by(region.sequence) %>%
+    mutate(index = residue.index - min(residue.index) + 1) %>%
+    ungroup %>%
+    mutate(i = 1:n()) %>%
+    select(pdb.id, chain.id, region.type, 
+           residue.index.pdb, residue.index, residue.aa, 
+           index, x, y, z, i)
+  
+  mat.coords <- dat.coords %>%
+    select(x, y, z) %>%
+    as.matrix()
+  rownames(mat.coords) <- dat.coords$i
+  
+  pc <- mat.coords[-which(is.na(rowSums(mat.coords))), ] %>%
+    prcomp()
+  
+  left_join(dat.coords,
+            tibble(i = attr(pc$x, "dimnames")[[1]] %>% as.integer,
+                   PC1 = scale(pc$x[,1]), PC2 = scale(pc$x[,2])))
+}
+```
+
+```{r}
+test.coords <- get_coords("5d2n_al2.pdb",
+                          "NLVPMVATV",
+                          "CILDNNNDMRF",
+                          "CASSLAPGTTNEKLFF")
+
+test.coords
+
+plt <- test.coords %>%
+  arrange(residue.index.pdb) %>%
+  ggplot(aes(x = PC1, y = PC2)) +
+  geom_path(aes(group = region.type, color = region.type)) +
+  geom_label(aes(label = residue.aa, fill = region.type),
+             color = "white") +
+  geom_text(aes(label = residue.index.pdb,
+                x = PC1 + 0.12, y = PC2 - 0.12), cex = 3) +
+  scale_color_brewer(guide = F, palette = "Set1") +
+  scale_fill_brewer(guide = F, palette = "Set1") +
+  theme_void() +
+  theme(aspect = 1)
+plt
+```
+
+```{r}
+get_contacts <- function(id) {
+  contacts %>%
+    ungroup %>%
+    filter(pdb.id == id, chain.id.from != chain.id.to) %>%
+    mutate(contact.idx = 1:n()) %>%
+    group_by(chain.id.from, chain.id.to,
+             residue.index.from, residue.index.to) %>%
+    mutate(contact.idx = min(contact.idx)) %>%
+    group_by(contact.idx) %>%
+    group_modify(~tibble(chain.id = c(.x$chain.id.from, .x$chain.id.to),
+                         residue.index = c(.x$residue.index.from, 
+                                           .x$residue.index.to))) %>%
+    ungroup %>%
+    unique
+}
+
+test.contacts <- get_contacts("5d2n_al2.pdb") %>% 
+  merge(test.coords) %>%
+  unique
+  
+test.contacts
+
+plt +
+  geom_path(data = test.contacts , aes(group = contact.idx),
+            linetype = "dotted", alpha = 0.5)
+```

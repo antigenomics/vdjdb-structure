@@ -1,0 +1,141 @@
+---
+title: "VDJdb template model graph"
+author: "M.S."
+date: '2023-03-03'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(igraph)
+library(reshape2)
+library(stringr)
+library(ggrepel)
+library(stringdist)
+select = dplyr::select
+```
+
+```{r}
+data <- read_tsv("vdjdb-2022-03-30/vdjdb_full.txt") %>%
+  filter(species == "HomoSapiens") %>%
+  select(cdr3.alpha, cdr3.beta, antigen.epitope, meta.structure.id) %>%
+  unique %>%
+  group_by(antigen.epitope) %>%
+  mutate(count = n(), has.structure = any(!is.na(meta.structure.id))) %>%
+  filter(count >= 5 & has.structure)
+
+ab_pairs <- with(data, tibble(cdr3.from = 
+                                c(cdr3.alpha, cdr3.beta),
+                              cdr3.to = 
+                                c(cdr3.beta, cdr3.alpha))) %>%
+  filter(!is.na(cdr3.from) & !is.na(cdr3.to)) %>%
+  unique
+
+pdb_ids <- rbind(data %>% 
+                   mutate(gene = "TRB", cdr3 = 
+                            cdr3.beta, meta.structure.id) %>%
+                   filter(!is.na(cdr3) & !is.na(meta.structure.id)) %>%
+                   select(gene, cdr3, meta.structure.id),
+                 data %>% 
+                   mutate(gene = "TRA", 
+                          cdr3 = cdr3.alpha, meta.structure.id) %>%
+                   filter(!is.na(cdr3) & !is.na(meta.structure.id)) %>%
+                   select(gene, cdr3, meta.structure.id))%>%
+  unique
+
+pdb_epitopes <- data %>%
+  filter(!is.na(meta.structure.id)) %>%
+  .$antigen.epitope %>%
+  unique
+
+cluster_ids <- read_tsv("vdjdb-2022-03-30/cluster_members.txt") %>%
+  mutate(cdr3 = cdr3aa,
+         motifid = cid) %>%
+  select(motifid, gene, cdr3) %>%
+  unique
+```
+
+
+```{r}
+THREADS = 40
+
+make_graph_1mm <- function(cdrs, no_singletons = T) {
+  set.seed(42)
+  
+  # hamming = 1 graph
+  mm <- stringdistmatrix(cdrs,
+                         method = "hamming",
+                         useNames = "strings",
+                         nthread = THREADS) %>%
+    as.matrix()
+  mm[mm != 1] <- 0
+  gg <- graph_from_adjacency_matrix(mm, mode = "undirected") %>%
+    simplify()
+  
+  # connected components
+  cc <- clusters(gg)
+  result <- tibble(cdr3 = names(cc$membership),
+                   cdr_cluster = paste0("C", cc$membership)) %>%
+    group_by(cdr_cluster) %>%
+    mutate(cdr_cluster_sz = n()) %>%
+    ungroup()
+  
+  # layout components with 2+ nodes
+  if (no_singletons) {
+    gg <- delete.vertices(gg, which(degree(gg) == 0))
+  }
+  
+  coords <- gg %>%
+    layout_with_graphopt(niter = 3000, charge = 0.005)
+  
+  # put together
+  result %>%
+    left_join(tibble(
+      cdr3 = names(V(gg)),
+      cdr_graph_x = coords[, 1],
+      cdr_graph_y = coords[, 2]
+    ))
+}
+```
+
+```{r}
+tibble(cdr3 = c(data$cdr3.alpha, data$cdr3.beta),
+       gene = c(rep("TRA", nrow(data)),
+                rep("TRB", nrow(data)))
+       ) %>%
+  filter(!is.na(cdr3)) %>%
+  unique %>%
+  mutate(len = nchar(cdr3)) %>%
+  group_by(gene, len) %>%
+  group_modify(~make_graph_1mm(.x$cdr3)) %>%
+  ungroup ->
+  data.g
+```
+
+```{r}
+data.ga <- data.g %>%
+  left_join(pdb_ids) %>%
+  left_join(cluster_ids) %>%
+  group_by(cdr_cluster) %>%
+  mutate(pdb_neigh = any(!is.na(meta.structure.id)),
+         motif_neigh = any(!is.na(motifid)))
+```
+
+```{r fig.height=4, fig.width=4}
+data.ga %>%
+  ggplot(aes(x = cdr_graph_x, y = cdr_graph_y)) +
+  geom_point(color ="grey", alpha = 0.5) +
+  geom_point(data = data.ga %>% filter(motif_neigh), 
+             color ="orange", alpha = 0.5) +
+  geom_point(data = data.ga %>% filter(pdb_neigh), 
+             color ="red", alpha = 0.5) +
+  geom_text_repel(aes(label = meta.structure.id)) +
+  facet_wrap(~gene) +
+  theme_void() +
+  theme(aspect = 1) -> p1
+pdf("p1.pdf", width = 10, height = 10)
+p1
+dev.off()
+p1
+```
