@@ -1,0 +1,1102 @@
+---
+title: "Analysis of modeled TCR-pMHC complexes"
+author: "Shcherbinin DS"
+date: '2023-01-23'
+output: html_document
+---
+          Load annotation files
+
+Needed files for the first chunk:
+
+1. Annotation file, containing information about modeled pdb filenames and mutation pathway "Annotation_file_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022"
+"neighbors.mut_v_3aa_mhc_tcr_cdr3_HM_ONLY_same_pept_sorted_2022_04.txt" - modeled mutation pathways 
+
+"vdjdb.slim.txt" - short version of VDJdb
+
+2. MIR output files, containing information about sequences, genes, close contacting residues etc. 
+"atomdist_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022.txt" - distances between atoms, situated closer than 5A.
+"general_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022_MOD.txt" - annotation of TCRs, peptides and MHC molecules
+"markup_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022.txt" and  "resmarkup_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022.txt" - information about aa. residues, forming valuable regions of proteins
+
+3. Files, containing calculated total and by-residue energy values
+"NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022_TOTAL_SCORES"
+"NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022_BYRES_SCORES"
+
+4. RIN_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022" - detailed information about contacting residues of TCRs and peptides: Contacting part and type of the interactions (h-bonds, electrostatic, VdW)
+
+5. "blosum_col.csv_FULL2" - blosum matrix
+
+NOT USED
+5. "NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022_ALL_PEPTIDES_SASA" - file, containing calculated SASA - for TCR - pMHC contacting regions  
+
+```{r Load data}    
+######################################## import data  ########################################3
+#knitr::opts_knit$set(root.dir = './')
+## Set working folder ##
+
+
+
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(stringr)
+library(ggpubr)
+library(reshape2)
+
+
+################  file names
+
+
+## create 1aa-3aa dictionary #
+resn3_list <- c('ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLU', 'GLN', 'GLY', 'HIS', 'ILE', 'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL')
+resn1_list <- c('A', 'R', 'N', 'D', 'C', 'E', 'Q', 'G', 'H', 'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W', 'Y', 'V')
+aa_dict <- data.frame(resn3_list, resn1_list)
+colnames(aa_dict) <- c("resn3", "resn1")
+fwrite(aa_dict, "aa_dict", col.names = F, sep = "\t")
+
+
+########
+### Load data
+## load annotation file
+annotation_file_all <- read.csv(file="Annotation_file_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022", header=T, sep='\t')
+## rename some columns
+names(annotation_file_all)[1] <- "pdb.id"
+names(annotation_file_all)[3] <- "chain.type"
+###############################   DELETE .PDB  #########################
+annotation_file_all[,1] <- unlist(strsplit(annotation_file_all[,1], split='.pdb', fixed=TRUE))
+########################################################################################################
+
+## load files from MIR output: 
+
+cont_file_all <- read.csv(file="atomdist_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022.txt", header=T, sep='\t')
+general_file_all <- read.csv(file="general_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022_MOD.txt", header=T, sep='\t')
+markup_file_all <- read.csv(file="markup_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022.txt", header=T, sep='\t')
+resmarkup_file_all  <- read.csv(file="resmarkup_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022.txt", header=T, sep='\t')
+## rename pdb files > pdb_part (no .pdb)
+
+general_file_all[,1] <- unlist(strsplit(general_file_all[,1], split='.pdb', fixed=TRUE))
+resmarkup_file_all[,1] <- unlist(strsplit(resmarkup_file_all[,1], split='.pdb', fixed=TRUE))
+markup_file_all[,1] <- unlist(strsplit(markup_file_all[,1], split='.pdb', fixed=TRUE))
+cont_file_all[,1] <- unlist(strsplit(cont_file_all[,1], split='.pdb', fixed=TRUE))
+
+## load energy files
+total_energy_file2_all <- read.csv(file="NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022_TOTAL_SCORES", sep = "\t", header=T)
+##
+
+byres_energy1_all <- read.csv(file="NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022_BYRES_SCORES", sep = "\t", header=T)
+colnames(byres_energy1_all) <- c("pdb.id", "chain.type", "mutation.order", "mutation.type", "resid.pdb.mutation", "resn.mut.to.3", "chain.id", "resid.peptide.pdb", "resn.pept.3", "peptide.chain", "byres.energy", "energy.type", "pdb.id.part")
+
+## load SASA file
+all_mut_sasa <- read.csv(file="NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022_ALL_PEPTIDES_SASA", sep = "\t", header=T)
+
+## load RIN file
+rin_all_mutated <- read.csv(file="RIN_NEW_MUTATOR_RUN_w_NEW_PATH_Modelled_2022", header=T)
+rin_all_mutated[,1] <- unlist(strsplit(rin_all_mutated[,1], split='.pdb', fixed=TRUE))
+
+######################################   RENAME RIN COLUMNS ############
+rin_all_mutated <- rin_all_mutated %>% rename("pdb.id" = "pdb", "peptide.chain" = "mol2.chain", "resid.peptide.pdb" = "mol2.resid", "chain.id" = "mol1.chain", "resid.tcr.pdb"= "mol1.pdb.resid", "chain.type" = "mol1", "resn.tcr.3" = "mol1.resn", "contact2" = "mol2", "resn.pept.3" = "mol2.resn", "rin.contact.type" = "contact.type", "rin.contact.part" = "sc.type", "rin.contact.distance" = "distance", "atom.tcr.contact" = "mol1.atom", "atom.peptide.contact"= "mol2.atom")
+ 
+######## leave only TCR - peptide contacts
+rin_all_mutated <- rin_all_mutated %>%filter(contact2 == "Peptide")  
+
+
+## load blosum matrices
+blosum_data <- read.csv(file="blosum_col.csv_FULL2", sep = "\t", header=T)
+
+## load VDJdb mutation path
+neighbors_mut_all_pepts <- read.csv(file="neighbors.mut_v_3aa_mhc_tcr_cdr3_HM_ONLY_same_pept_sorted_2022_04.txt", sep = "\t", header=T)
+
+vdjdb_slim <- fread("vdjdb.slim.txt") 
+##################################################
+
+
+
+```
+
+#######################
+
+
+        Combining of previously loaded annotation files
+        
+
+
+```{r Adding energy and distance values}
+
+#######
+## add TCR annotation to  annotation_file
+all_merged_file <- annotation_file_all %>% merge(general_file_all)
+
+###########
+## get peptide info and add it to the annotation_file
+general_file_pept_part <- general_file_all[general_file_all$chain.component=="PEPTIDE",] %>% select(pdb.id, chain.id, allele.info, seq.length)
+colnames(general_file_pept_part) <- c("pdb.id", "peptide.chain", "peptide", "peptide.length")
+
+all_merged_file <- all_merged_file %>% merge(general_file_pept_part)
+
+###################
+## make two lists of chains (chain1.from - chain2.to) needed for merging of contacting data
+all_merged_file_tcr_pept <-all_merged_file %>% select(pdb.id, chain.id, peptide.chain) 
+colnames(all_merged_file_tcr_pept) <- c("pdb.id", "chain.id.from", "chain.id.to")
+
+all_merged_file_pept_tcr <-all_merged_file %>% select(pdb.id, chain.id, peptide.chain)
+colnames(all_merged_file_pept_tcr) <- c("pdb.id", "chain.id.to", "chain.id.from")
+
+#################
+## get TCR - peptide contacts 
+cont_file_tcr_pept_all <- all_merged_file_tcr_pept %>% merge(cont_file_all)
+colnames(cont_file_tcr_pept_all) <- c("pdb.id", "chain.id", "peptide.chain","resid.tcr", "resid.peptide", "atom.tcr", "atom.peptide", "distance")
+
+## get peptide - TCR contacts
+cont_file_pept_tcr_all <- all_merged_file_pept_tcr %>% merge(cont_file_all)
+colnames(cont_file_pept_tcr_all) <- c("pdb.id", "chain.id", "peptide.chain","resid.peptide", "resid.tcr", "atom.peptide", "atom.tcr", "distance")
+
+########## 
+#calculate minimal distance betwen two residues
+cont_file_pept_tcr_all %>% select(pdb.id, chain.id, peptide.chain, resid.peptide, resid.tcr, distance) %>% group_by(pdb.id, chain.id, peptide.chain, resid.peptide, resid.tcr) %>% summarise(min.distance = min(distance)) %>% ungroup -> cont_file_pept_tcr_all_min
+
+cont_file_tcr_pept_all %>% select(pdb.id, chain.id, peptide.chain, resid.peptide, resid.tcr, distance) %>% group_by(pdb.id, chain.id, peptide.chain, resid.peptide, resid.tcr) %>% summarise(min.distance = min(distance)) %>% ungroup -> cont_file_tcr_pept_all_min
+
+#####
+#bind two dataframes
+cont_file_all_selected <- rbind(cont_file_pept_tcr_all_min, cont_file_tcr_pept_all_min)
+
+
+#######
+resmarkup_file_all %>% select(-residue.ins.code) -> resmarkup_file_all_part_tcr
+colnames(resmarkup_file_all_part_tcr) <- c("pdb.id", "chain.id", "region.type", "resid.tcr", "resid.tcr.pdb", "resname.tcr")
+cont_file_all_selected_resn_TMP <- cont_file_all_selected %>% merge(resmarkup_file_all_part_tcr)
+
+resmarkup_file_all %>% filter(region.type == "PEPTIDE") %>% select(-residue.ins.code, -region.type) -> resmarkup_file_all_part_pept
+colnames(resmarkup_file_all_part_pept) <- c("pdb.id", "peptide.chain", "resid.peptide", "resid.peptide.pdb", "resname.peptide")
+
+cont_file_all_selected_resn_TMP2 <- cont_file_all_selected %>% merge(resmarkup_file_all_part_pept)
+cont_file_all_selected_resn <- merge(cont_file_all_selected_resn_TMP, cont_file_all_selected_resn_TMP2)
+
+
+####removing some dataframes
+rm(all_merged_file_tcr_pept, all_merged_file_pept_tcr, cont_file_tcr_pept_all, cont_file_pept_tcr_all, cont_file_all_selected_resn_TMP, cont_file_all_selected_resn_TMP2, cont_file_all, cont_file_pept_tcr_all_min, cont_file_tcr_pept_all_min, resmarkup_file_all_part_tcr, resmarkup_file_all_part_pept, general_file_pept_part, cont_file_all_selected)
+
+
+######  
+cont_file_all_selected_resn_TMP <- cont_file_all_selected_resn
+colnames(cont_file_all_selected_resn_TMP) <- c("pdb.id", "chain.id", "resid.mutation", "peptide.chain", "resid.peptide", "min.distance", "region.type", "resid.pdb.mutation", "resn.mut.to", "resid.peptide.pdb", "resname.peptide")
+
+all_merged_file2 <- all_merged_file %>% merge(cont_file_all_selected_resn_TMP, all.x=TRUE)
+all_merged_file2[is.na(all_merged_file2)] <- "none"
+all_merged_file2 <- merge(all_merged_file2, aa_dict, by.x='resname.peptide', by.y='resn1', all.x=TRUE) 
+all_merged_file2 <- all_merged_file2 %>% rename("resn.pept.3" = "resn3")
+rm(cont_file_all_selected_resn_TMP)
+
+########## Add total energy values 
+
+#rm(all_merged_file_w_energy)
+
+all_merged_file_w_energy <- merge(all_merged_file2, total_energy_file2_all[total_energy_file2_all$mutation.order != "none", ], by.x = c('pdb.id', 'chain.type', 'mutation.type'), by.y = c('pdb.id', 'chain.type', 'mutation.type'), all.x=TRUE)
+all_merged_file_w_energy[is.na(all_merged_file_w_energy)] <- "none"
+
+total_energy_file2_all_tmp <- rename(total_energy_file2_all, "total.energy.from" = "total.energy")
+
+all_merged_file_w_energy <- merge(all_merged_file_w_energy, total_energy_file2_all_tmp[total_energy_file2_all_tmp$mutation.order != "none", ], by.x = c('file.from.part', 'chain.type', 'mutation.type', 'energy.type'), by.y = c('pdb.id.part', 'chain.type', 'mutation.type', 'energy.type'), all.x=TRUE)
+all_merged_file_w_energy[is.na(all_merged_file_w_energy)] <- "none"
+all_merged_file_w_energy <- rename(all_merged_file_w_energy, "pdb.id" = "pdb.id.x")
+
+
+#####  add byres energy  values
+
+all_merged_file_w_energy_byres <- all_merged_file_w_energy  %>% merge(byres_energy1_all, by = c('pdb.id', 'chain.type', 'mutation.type', 'resid.pdb.mutation', 'resn.mut.to.3', 'resid.peptide.pdb', 'resn.pept.3', 'energy.type'), all.x=TRUE)
+
+all_merged_file_w_energy_byres[is.na(all_merged_file_w_energy_byres)] <- "none"
+
+
+#######################################   Set column names
+
+colnames(all_merged_file_w_energy_byres)[c(38,23,17,12,13,45)] <- c("pdb.id.from", "pdb.id.part", "mutation.order", "chain.id", "peptide.chain", "pdb.id.part.z")
+############################################################# Select structures with calculated energy values
+        
+all_merged_file_w_energy_byres_selected <- all_merged_file_w_energy_byres %>% select(pdb.id,chain.type, mutation.type, mutation.order, cdr3.from, cdr3.to, resid.pdb.mutation, resid.mutation, resid.cdr3.pose, resn.mut.from, resn.mut.from.3, resn.mut.to, resn.mut.to.3, peptide, peptide.length, resid.peptide.pdb, resid.peptide, resname.peptide, resn.pept.3, min.distance, byres.energy, total.energy, total.energy.from, energy.type, allele.info, complex.species, cdr3.start, cdr3.stop, pdb_id, pdb.id.part, file.from.part, chain.id, peptide.chain) %>% filter(total.energy.from != "none") %>% filter(complex.species == "Human") 
+
+all_merged_file_w_energy_byres_selected[is.na(all_merged_file_w_energy_byres_selected)] <- "none"
+
+
+##### Number of contacting contacting residues in specific CDR3 positions
+
+all_merged_file_w_energy_byres_selected %>% filter(min.distance != "none") %>% select(pdb.id.part, chain.id, resid.cdr3.pose) %>% unique() %>% group_by(resid.cdr3.pose) %>% add_count(resid.cdr3.pose) %>% select(resid.cdr3.pose, n) %>% unique()
+
+### Plot mutaions vs contacing positions in CDR3 loops 
+mut_pose_count <- all_merged_file_w_energy_byres_selected %>% select(pdb.id.part, chain.id, resid.cdr3.pose) %>% unique() %>% group_by(resid.cdr3.pose) %>% add_count(resid.cdr3.pose) %>% select(resid.cdr3.pose, n) %>% unique()
+mut_pose_count <- mut_pose_count %>% rename("num.all" = "n")
+#
+mut_pose_count_cont <- all_merged_file_w_energy_byres_selected %>% filter(min.distance != "none") %>% select(pdb.id.part, chain.id, resid.cdr3.pose) %>% unique() %>% group_by(resid.cdr3.pose) %>% add_count(resid.cdr3.pose) %>% select(resid.cdr3.pose, n) %>% unique()
+mut_pose_count_cont <- mut_pose_count_cont %>% rename("num.cont" = "n")
+
+mut_pose_count <- mut_pose_count %>% merge(mut_pose_count_cont, all=TRUE)
+mut_pose_count[is.na(mut_pose_count)] <- as.numeric(0)
+
+mut_pose_count[,2:3] %>% as.matrix() %>% t() %>% barplot(names.arg = mut_pose_count$resid.cdr3.pose, beside = TRUE, col = c("peachpuff", "skyblue"), legend.text = c("All mutations", "Contacting")) + xlim(0, 30)
+
+all_merged_file_w_energy_byres_selected %>% select(cdr3.from, cdr3.to) %>% unique() %>% .$cdr3.to %>% nchar() %>% as.factor() %>%  summary()
+
+
+########################  Add  SASA values 
+
+all_merged_file_w_energy_byres_selected_w_SASA <- merge(all_merged_file_w_energy_byres_selected, all_mut_sasa, by = c('pdb.id', 'resid.peptide.pdb', 'resn.pept.3', 'peptide.chain'), all.x=TRUE)
+all_merged_file_w_energy_byres_selected_w_SASA[is.na(all_merged_file_w_energy_byres_selected_w_SASA)] <- "none"
+
+### Add RIN data. Sort by SC 
+
+rin_all_mutated %>% group_by(pdb.id, chain.type, chain.id, resid.tcr.pdb, resn.tcr.3, contact2, peptide.chain, resid.peptide.pdb, resn.pept.3) %>% arrange(desc(rin.contact.type)) %>% arrange(rin.contact.part) %>% slice_tail() %>% arrange(pdb.id, chain.type, resid.tcr.pdb, resn.tcr.3, resid.peptide.pdb, resn.pept.3) -> rin_all_mutated_SC_ARRANGED
+
+rin_all_mutated_SC_ARRANGED <- rin_all_mutated_SC_ARRANGED %>% rename("resid.pdb.mutation" = "resid.tcr.pdb", "resn.mut.to.3" = "resn.tcr.3")
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC <- merge(all_merged_file_w_energy_byres_selected_w_SASA, rin_all_mutated_SC_ARRANGED, by = c('pdb.id', 'chain.type', 'chain.id', 'resid.pdb.mutation', "resn.mut.to.3", 'resid.peptide.pdb', 'resn.pept.3', 'peptide.chain'), all.x=TRUE)
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC[is.na(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC)] <- "none"
+
+########################### calculating of dEnergy
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC$dEnergy <- (as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC$total.energy) - as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC$total.energy.from))
+
+#############  add blosum data
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC <- merge(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC, blosum_data, by.x = c('resn.mut.from', 'resn.mut.to'), by.y = c('res1', 'res2'),  all.x=TRUE)
+
+
+################################# calculation of absolute values of dEnergy and merging 
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC$abs.dEnergy <- all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC$dEnergy %>% abs()
+
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC$min.distance <- as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC$min.distance) 
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC %>% group_by(pdb.id, chain.type, cdr3.from, cdr3.to, mutation.type, dEnergy, abs.dEnergy, energy.type) %>% summarise(min.min.distance = min(min.distance)) %>% ungroup() %>% merge(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC, all.x=TRUE) -> all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist %>% ungroup()
+
+
+##########################
+########  V & J- GENES  Import vdjdb_slim and check that V and J genes are the same in original and modeled structures
+
+
+vdjdb_slim %>% select(gene, cdr3, antigen.epitope, v.segm, j.segm) %>% unique() %>% rename("cdr3.to" = "cdr3", "chain.type" = "gene", "v.segm.vdjdb" = "v.segm",  "j.segm.vdjdb" = "j.segm") %>% merge(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC %>% filter(complex.species == "Human" & !is.na(dEnergy)) %>% select(chain.type, cdr3.from, cdr3.to, allele.info, peptide) %>% unique() %>% separate(allele.info, c("v.segm", "j.segm"), sep = ":"), all.y=TRUE) %>% filter( !is.na(antigen.epitope) & antigen.epitope == peptide) %>% merge(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist, all.y=TRUE, by=c('chain.type', 'cdr3.to', 'cdr3.from', 'peptide')) %>% filter(! is.na(v.segm)) -> all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ
+
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ <- all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ  %>% mutate(v.check = ifelse(str_detect(v.segm.vdjdb, fixed(as.character(v.segm))), "1", "0")) %>% mutate(j.check = ifelse(str_detect(j.segm.vdjdb, fixed(as.character(j.segm))), "1", "0"))
+
+
+###################### 
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ %>% group_by(chain.type, cdr3.from, cdr3.to, v.segm, j.segm, peptide, resname.peptide, resid.peptide, mutation.type, energy.type, mutation.order) %>% summarise(mean.pdb.min.distance = as.numeric(mean(as.numeric(min.distance))), mean.pdb.min.min.distance = as.numeric(mean(as.numeric(min.min.distance))), mean.pdb.byres.energy = as.numeric(mean(as.numeric(byres.energy))), mean.pdb.total.energy = as.numeric(mean(as.numeric(total.energy))), mean.pdb.total.energy.from = as.numeric(mean(as.numeric(total.energy.from))), mean.pdb.dEnergy = as.numeric(mean(as.numeric(dEnergy))), mean.pdb.abs.dEnergy = as.numeric(mean(as.numeric(abs.dEnergy)))) %>% ungroup %>% merge(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ ,by = c('chain.type', 'cdr3.from', 'cdr3.to', 'v.segm', 'j.segm', 'peptide', 'resname.peptide', 'resid.peptide', 'mutation.type', 'energy.type'), all.y = TRUE) -> all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN
+
+################## convert NA to "none" and make some variables as numeric
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN[is.na(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN)] <- "none"
+
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$mean.pdb.min.distance <- as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$mean.pdb.min.distance)
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$mean.pdb.min.min.distance<- as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$mean.pdb.min.min.distance)
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$mean.pdb.byres.energy<- as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$mean.pdb.byres.energy)
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$min.min.distance<- as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$min.min.distance)
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$min.distance<- as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$min.distance)
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$byres.energy<- as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$byres.energy)
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$total.energy<- as.numeric(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN$total.energy)
+
+```
+
+
+
+
+     Plot absolute values of dEnergy vs distance  (FIGURE 4)
+
+#dEnergy was calculated using different variations of Rosetta scoring functions for repacked and minimized modeled structures
+
+
+```{r plotting abs(dEnergy) vs distance }
+
+
+## closest contacting residues
+
+data_1=all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN
+dist_col="mean.pdb.min.min.distance"
+
+plot_dEnergy_with_MEAN_vs_dist <- function(optimization = "Mutated", energy = "OLD", main_title="dEnergy (abs, Rosetta) vs distance (closest contacts)", sub_title = "Minimized structures") {
+      data_1 %>% filter(resname.peptide != "none" & mutation.type == optimization & mean.pdb.abs.dEnergy < 10 & mean.pdb.abs.dEnergy > 0.1 & energy.type == energy & v.check == "1"  & j.check == "1") %>% dplyr::select(allele.info, chain.type, cdr3.from, cdr3.to, dist_col, mean.pdb.abs.dEnergy) %>% unique %>% ggscatter(x = dist_col, y = "mean.pdb.abs.dEnergy", add = "reg.line", conf.int = TRUE,cor.coef = TRUE, cor.method = "pearson", color = "chain.type",ellipse = TRUE, shape = "chain.type", palette = c("#da0017", "#2c69a9")) + xlab("Distance") + ylab("abs.dEnergy") + stat_cor(aes(color = chain.type), label.x = 4.0, label.y = c(9.0,8), show.legend = TRUE, label.x.npc = "left", label.y.npc = "bottom")+ labs(title=main_title, subtitle = sub_title) + theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+}
+P_dEnergy_with_MEAN_vs_min_dist_min_rosetta_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated", "OLD", "dEnergy (abs, Rosetta) vs distance (closest contacts)", "Minimized structures")
+P_dEnergy_with_MEAN_vs_min_dist_min_large_patch_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated", "patch_large", "dEnergy (abs, Atlas large) vs distance (closest contacts)", "Minimized structures")
+P_dEnergy_with_MEAN_vs_min_dist_min_small_patch_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated", "patch_small", "dEnergy (abs, Atlas small) vs distance (closest contacts)", "Minimized structures")
+
+P_dEnergy_with_MEAN_vs_min_dist_rep_rosetta_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated_repacked", "OLD", "dEnergy (abs, Rosetta) vs distance (closest contacts)", "Repacked structures")
+P_dEnergy_with_MEAN_vs_min_dist_rep_large_patch_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated_repacked", "patch_large", "dEnergy (abs, Atlas large) vs distance (closest contacts)", "Repacked structures")
+P_dEnergy_with_MEAN_vs_min_dist_rep_small_patch_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated_repacked", "patch_small", "dEnergy (abs, Atlas small) vs distance (closest contacts)", "Repacked structures")
+
+png("NEW_MUTATOR_RUN_w_NEW_PATH_with_MEAN_dEnergy_vs_min_Distance_V_J_genes_check_2022_2_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(P_dEnergy_with_MEAN_vs_min_dist_min_rosetta_V_J_genes_check, P_dEnergy_with_MEAN_vs_min_dist_min_large_patch_V_J_genes_check, P_dEnergy_with_MEAN_vs_min_dist_min_small_patch_V_J_genes_check, P_dEnergy_with_MEAN_vs_min_dist_rep_rosetta_V_J_genes_check, P_dEnergy_with_MEAN_vs_min_dist_rep_large_patch_V_J_genes_check, P_dEnergy_with_MEAN_vs_min_dist_rep_small_patch_V_J_genes_check)
+dev.off()
+
+###############   All contacting residues (one reside of CDR3 loop might interact with several peptide residues)
+
+dist_col="mean.pdb.min.distance"
+
+P_dEnergy_with_MEAN_vs_all_dist_min_rosetta_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated", "OLD", "dEnergy (abs, Rosetta) vs distance (all contacts)", "Minimized structures")
+P_dEnergy_with_MEAN_vs_all_dist_min_large_patch_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated", "patch_large", "dEnergy (abs, Atlas large) vs distance (all contacts)", "Minimized structures")
+P_dEnergy_with_MEAN_vs_all_dist_min_small_patch_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated", "patch_small", "dEnergy (abs, Atlas small) vs distance (all contacts)", "Minimized structures")
+
+P_dEnergy_with_MEAN_vs_all_dist_rep_rosetta_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated_repacked", "OLD", "dEnergy (abs, Rosetta) vs distance (all contacts)", "Repacked structures")
+P_dEnergy_with_MEAN_vs_all_dist_rep_large_patch_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated_repacked", "patch_large", "dEnergy (abs, Atlas large) vs distance (all contacts)", "Repacked structures")
+P_dEnergy_with_MEAN_vs_all_dist_rep_small_patch_V_J_genes_check <- plot_dEnergy_with_MEAN_vs_dist("Mutated_repacked", "patch_small", "dEnergy (abs, Atlas small) vs distance (all contacts)", "Repacked structures")
+
+png("NEW_MUTATOR_RUN_w_NEW_PATH_with_MEAN_dEnergy_vs_all_Distance_V_J_genes_check_2022_2_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(P_dEnergy_with_MEAN_vs_all_dist_min_rosetta_V_J_genes_check, P_dEnergy_with_MEAN_vs_all_dist_min_large_patch_V_J_genes_check, P_dEnergy_with_MEAN_vs_all_dist_min_small_patch_V_J_genes_check, P_dEnergy_with_MEAN_vs_all_dist_rep_rosetta_V_J_genes_check, P_dEnergy_with_MEAN_vs_all_dist_rep_large_patch_V_J_genes_check, P_dEnergy_with_MEAN_vs_all_dist_rep_small_patch_V_J_genes_check, common.legend = TRUE)
+dev.off()
+
+
+```
+
+              
+        
+              
+              Addition of the amino acid descriptors (PART1)
+        
+
+1.  Atchley descriptors
+Indices ofCDR3 residues have preffix "cdr3." and corresponding values of peptide residues - "p." 
+
+```{r Add Atchley descriptors}
+
+## ##############
+library(HDMD)
+library(Hmisc)
+
+
+atchley <- as.data.frame(AAMetric.Atchley)
+atchley_names <- rownames(atchley)
+atchley <- cbind(atchley, atchley_names)
+rownames(atchley) <- NULL
+colnames(atchley)[6] <- "aa"
+
+
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN %>% ungroup %>% dplyr::select (-c(atom.tcr.contact, atom.peptide.contact, mol1.region.type, mol1.residue.aa, mol2.region.type, contact2, complex.species, rin.contact.distance)) -> all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN2
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN2 %>% filter(!is.na(min.distance)) %>% merge(atchley, by.x=c('resn.mut.to'), by.y=c('aa'), all.x=TRUE ) -> all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN2_atch
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN2_atch)[c(70:74)] <-c("cdr3.a.pah", "cdr3.a.pss", "cdr3.a.ms", "cdr3.a.cc", "cdr3.a.ec") 
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN2_atch <- merge(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN2_atch, atchley, by.x=c('resname.peptide'), by.y=c('aa'), all.x=TRUE )
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN2_atch)[c(75:79)] <- c("p.a.pah", "p.a.pss", "p.a.ms", "p.a.cc", "p.a.ec")
+
+```
+
+
+
+
+              Addition of the amino acid descriptors (PART2)
+
+2.  Descriptors calculated using "Peptides" package of R: 
+Blosum indices(Blos1-Blos10), Kidera factors(KF1-KF13), VHSE(VHSE1- VHSE 8), Cruciani properties(PP1-PP3), zScales(Z1-Z5), FASGAI(F1-F6)
+
+Indices ofCDR3 residues have preffix "cdr3." and corresponding values of peptide residues - "p." 
+
+
+```{r CALCULATE DESCRIPTORS}
+
+library(Peptides)
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN2_atch, t(as.data.frame(zScales(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN2_atch$resn.mut.to))))
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(80:84)] <- c("cdr3.Z1", "cdr3.Z2", "cdr3.Z3", "cdr3.Z4", "cdr3.Z5")
+
+         
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(crucianiProperties(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resn.mut.to))))
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(85:87)] <- c("cdr3.PP1", "cdr3.PP2", "cdr3.PP3")
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(fasgaiVectors(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resn.mut.to))))
+
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(88:93)] <- c("cdr3.F1", "cdr3.F2", "cdr3.F3", "cdr3.F4", "cdr3.F5", "cdr3.F6")
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(vhseScales(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resn.mut.to))))
+
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(94:101)] <- c("cdr3.VHSE1", "cdr3.VHSE2", "cdr3.VHSE3", "cdr3.VHSE4", "cdr3.VHSE5", "cdr3.VHSE6", "cdr3.VHSE7", "cdr3.VHSE8")
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(blosumIndices(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resn.mut.to))))
+
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(102:111)] <- c("cdr3.Blos1", "cdr3.Blos2", "cdr3.Blos3", "cdr3.Blos4", "cdr3.Blos5", "cdr3.Blos6", "cdr3.Blos7", "cdr3.Blos8", "cdr3.Blos9", "cdr3.Blos10")
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(kideraFactors(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resn.mut.to))))
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(112:121)] <- c("cdr3.KF1", "cdr3.KF2", "cdr3.KF3", "cdr3.KF4", "cdr3.KF5", "cdr3.KF6", "cdr3.KF7", "cdr3.KF8", "cdr3.KF9", "cdr3.KF10")
+
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(zScales(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resname.peptide))))
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(122:126)] <- c("p.Z1", "p.Z2", "p.Z3", "p.Z4", "p.Z5")
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(crucianiProperties(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resname.peptide))))
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(127:129)] <- c("p.PP1", "p.PP2", "p.PP3")
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(fasgaiVectors(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resname.peptide))))
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(130:135)] <- c("p.F1", "p.F2", "p.F3", "p.F4", "p.F5", "p.F6")
+
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(vhseScales(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resname.peptide))))
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(136:143)] <- c("p.VHSE1", "p.VHSE2", "p.VHSE3", "p.VHSE4", "p.VHSE5", "p.VHSE6", "p.VHSE7", "p.VHSE8")
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(blosumIndices(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resname.peptide))))
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(144:153)] <- c("p.Blos1", "p.Blos2", "p.Blos3", "p.Blos4", "p.Blos5", "p.Blos6", "p.Blos7", "p.Blos8", "p.Blos9", "p.Blos10")
+
+
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors  <- cbind (all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors, t(as.data.frame(kideraFactors(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors$resname.peptide))))
+
+colnames(all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors)[c(154:163)] <- c("p.KF1", "p.KF2", "p.KF3", "p.KF4", "p.KF5", "p.KF6", "p.KF7", "p.KF8", "p.KF9", "p.KF10")
+
+
+```
+
+
+
+
+              Addition of the amino acid descriptors (PART3)
+
+3. Adding 
+Indices ofCDR3 residues have preffix "cdr3." and corresponding values of peptide residues - "p." 
+
+```{r Add blosum data}
+blosum_data %>% rename("SIJ.62.from" = "SIJ.62", "QIJ.62.from" = "QIJ.62", "BLA.62.from" = "BLA.62", "SIJ.100.from" = "SIJ.100", "QIJ.100.from" = "QIJ.100", "BLA.100.from" = "BLA.100") -> blosum_data.from
+ 
+blosum_data %>% rename("SIJ.62.to" = "SIJ.62", "QIJ.62.to" = "QIJ.62", "BLA.62.to" = "BLA.62", "SIJ.100.to" = "SIJ.100", "QIJ.100.to" = "QIJ.100", "BLA.100.to" = "BLA.100") -> blosum_data.to
+ 
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors %>% dplyr::select(cdr3.from, cdr3.to, resn.mut.from, resn.mut.to, chain.type, energy.type, mean.pdb.abs.dEnergy, mutation.type, mean.pdb.min.distance) %>% unique() -> test_new_blosum_scores
+
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors %>% filter(min.distance == min.min.distance) %>%  dplyr::select(cdr3.from, cdr3.to, resn.mut.from, resn.mut.to, chain.type, energy.type, mean.pdb.abs.dEnergy, mutation.type, mean.pdb.min.distance) %>% unique() -> test_new_blosum_scores_only_closest
+
+test_new_blosum_scores %>% merge(blosum_data, by.x = c('resn.mut.from', 'resn.mut.to'), by.y = c('res1', 'res2'),  all.x=TRUE)  -> test_new_blosum_scores
+
+test_new_blosum_scores %>% cbind(test_new_blosum_scores$resn.mut.to) -> test_new_blosum_scores
+names(test_new_blosum_scores)[16] <- "resn.mut.to2"
+test_new_blosum_scores %>% cbind(test_new_blosum_scores$resn.mut.from) -> test_new_blosum_scores
+names(test_new_blosum_scores)[17] <- "resn.mut.from2"
+
+test_new_blosum_scores %>% merge(blosum_data.to, by.x = c('resn.mut.to', 'resn.mut.to2'), by.y = c('res1', 'res2'),  all.x=TRUE)  -> test_new_blosum_scores
+
+test_new_blosum_scores %>% merge(blosum_data.from, by.x = c('resn.mut.from', 'resn.mut.from2'), by.y = c('res1', 'res2'),  all.x=TRUE)  -> test_new_blosum_scores
+
+
+test_new_blosum_scores %>% mutate(BLA.100.recalc.mean = (-BLA.100.from + BLA.100 - BLA.100.to)/2, BLA.62.recalc.mean = (-BLA.62.from + BLA.62 - BLA.62.to)/2, SIJ.100.recalc.mean = (-SIJ.100.from + SIJ.100 - SIJ.100.to)/2, SIJ.62.recalc.mean = (-SIJ.62.from + SIJ.62 - SIJ.62.to)/2, QIJ.100.recalc.mean = (-QIJ.100.from + QIJ.100 - QIJ.100.to)/2, QIJ.62.recalc.mean = (-QIJ.62.from + QIJ.62 - QIJ.62.to)/2) -> test_new_blosum_scores
+
+
+###### only close contacting
+test_new_blosum_scores_only_closest %>% merge(blosum_data, by.x = c('resn.mut.from', 'resn.mut.to'), by.y = c('res1', 'res2'),  all.x=TRUE)  -> test_new_blosum_scores_only_closest
+
+test_new_blosum_scores_only_closest %>% cbind(test_new_blosum_scores_only_closest$resn.mut.to) -> test_new_blosum_scores_only_closest
+names(test_new_blosum_scores_only_closest)[16] <- "resn.mut.to2"
+test_new_blosum_scores_only_closest %>% cbind(test_new_blosum_scores_only_closest$resn.mut.from) -> test_new_blosum_scores_only_closest
+names(test_new_blosum_scores_only_closest)[17] <- "resn.mut.from2"
+
+test_new_blosum_scores_only_closest %>% merge(blosum_data.to, by.x = c('resn.mut.to', 'resn.mut.to2'), by.y = c('res1', 'res2'),  all.x=TRUE)  -> test_new_blosum_scores_only_closest
+
+test_new_blosum_scores_only_closest %>% merge(blosum_data.from, by.x = c('resn.mut.from', 'resn.mut.from2'), by.y = c('res1', 'res2'),  all.x=TRUE)  -> test_new_blosum_scores_only_closest
+
+
+test_new_blosum_scores_only_closest %>% mutate(BLA.100.recalc.mean = (-BLA.100.from + BLA.100 - BLA.100.to)/2, BLA.62.recalc.mean = (-BLA.62.from + BLA.62 - BLA.62.to)/2, SIJ.100.recalc.mean = (-SIJ.100.from + SIJ.100 - SIJ.100.to)/2, SIJ.62.recalc.mean = (-SIJ.62.from + SIJ.62 - SIJ.62.to)/2, QIJ.100.recalc.mean = (-QIJ.100.from + QIJ.100 - QIJ.100.to)/2, QIJ.62.recalc.mean = (-QIJ.62.from + QIJ.62 - QIJ.62.to)/2) -> test_new_blosum_scores_only_closest
+
+```
+
+
+
+
+
+       Plot Blosum scores vs the absolute values of dEnergy calculated for all modeled structures. Even with non-contacting substitutions 
+       
+#dEnergy was calculated using different variations of Rosetta scoring functions for repacked and minimized modeled structures
+
+
+```{r Plot Blosum vs dEnergy , echo=FALSE}
+
+data_blos=test_new_blosum_scores
+plot_dEnergy_vs_blos <- function(optimization = "Mutated", energy = "OLD", blos_index = "SIJ.62.recalc.mean", x_lab = "SIJ62.v2", main_title="SIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", sub_title = "All mutated residues, Minimized") {
+
+  data_blos %>% dplyr::select(-mean.pdb.min.distance) %>% unique %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1) %>% ggscatter(x = blos_index, y="mean.pdb.abs.dEnergy", add = "reg.line", conf.int = TRUE,cor.coef = TRUE, cor.method = "pearson", color = "chain.type",ellipse = TRUE, shape = "chain.type", palette = c("#da0017", "#2c69a9")) + xlab(x_lab) + ylab("abs.dEnergy") + stat_cor(aes(color = chain.type), label.x = -0.0, label.y = c(9.0,8), show.legend = TRUE, label.x.npc = "left", label.y.npc = "bottom", hjust = 1)+ labs(title=main_title, subtitle = sub_title) + theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+}
+
+####  BLOS62, Rosetta   
+p_dEnergy_vs_SIJ62_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "OLD", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Minimized")
+p_dEnergy_vs_SIJ62_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "OLD", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Repacked")
+p_dEnergy_vs_QIJ62_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "OLD", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Minimized")
+p_dEnergy_vs_QIJ62_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "OLD", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Repacked")
+p_dEnergy_vs_BLA62_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "OLD", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Minimized")
+p_dEnergy_vs_BLA62_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "OLD", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Repacked")
+
+####  BLOS100, Rosetta
+p_dEnergy_vs_SIJ100_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "OLD", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Minimized")
+p_dEnergy_vs_SIJ100_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "OLD", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Repacked")
+p_dEnergy_vs_QIJ100_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "OLD", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Minimized")
+p_dEnergy_vs_QIJ100_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "OLD", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Repacked")
+p_dEnergy_vs_BLA100_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "OLD", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Minimized")
+p_dEnergy_vs_BLA100_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "OLD", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Rosetta", "All mutated residues, Repacked")
+
+png("Blos62_recalc_new_path_MEAN_vs_dEnergy_Rosetta_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_vs_SIJ62_recalc_new_path_MEAN_min_all, p_dEnergy_vs_QIJ62_recalc_new_path_MEAN_min_all, p_dEnergy_vs_BLA62_recalc_new_path_MEAN_min_all, p_dEnergy_vs_SIJ62_recalc_new_path_MEAN_rep_all, p_dEnergy_vs_QIJ62_recalc_new_path_MEAN_rep_all, p_dEnergy_vs_BLA62_recalc_new_path_MEAN_rep_all, common.legend = TRUE) 
+dev.off()
+
+png("Blo100_recalc_new_path_MEAN_vs_dEnergy_Rosetta_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_vs_SIJ100_recalc_new_path_MEAN_min_all, p_dEnergy_vs_QIJ100_recalc_new_path_MEAN_min_all, p_dEnergy_vs_BLA100_recalc_new_path_MEAN_min_all, p_dEnergy_vs_SIJ100_recalc_new_path_MEAN_rep_all, p_dEnergy_vs_QIJ100_recalc_new_path_MEAN_rep_all, p_dEnergy_vs_BLA100_recalc_new_path_MEAN_rep_all, common.legend = TRUE)
+dev.off()
+
+####  BLOS62, Large patch  
+p_dEnergy_pl_vs_SIJ62_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_large", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Minimized")
+p_dEnergy_pl_vs_SIJ62_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_large", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Repacked")
+p_dEnergy_pl_vs_QIJ62_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_large", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Minimized")
+p_dEnergy_pl_vs_QIJ62_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_large", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Repacked")
+p_dEnergy_pl_vs_BLA62_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_large", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Minimized")
+p_dEnergy_pl_vs_BLA62_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_large", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Repacked")
+
+####  BLOS100, Large patch
+p_dEnergy_pl_vs_SIJ100_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_large", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Minimized")
+p_dEnergy_pl_vs_SIJ100_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_large", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Repacked")
+p_dEnergy_pl_vs_QIJ100_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_large", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Minimized")
+p_dEnergy_pl_vs_QIJ100_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_large", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Repacked")
+p_dEnergy_pl_vs_BLA100_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_large", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Minimized")
+p_dEnergy_pl_vs_BLA100_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_large", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Atlas large", "All mutated residues, Repacked")
+
+png("Blos62_recalc_new_path_MEAN_vs_dEnergy_patch_large_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_pl_vs_SIJ62_recalc_new_path_MEAN_min_all, p_dEnergy_pl_vs_QIJ62_recalc_new_path_MEAN_min_all, p_dEnergy_pl_vs_BLA62_recalc_new_path_MEAN_min_all, p_dEnergy_pl_vs_SIJ62_recalc_new_path_MEAN_rep_all, p_dEnergy_pl_vs_QIJ62_recalc_new_path_MEAN_rep_all, p_dEnergy_pl_vs_BLA62_recalc_new_path_MEAN_rep_all, common.legend = TRUE) 
+dev.off()
+
+png("Blo100_recalc_new_path_MEAN_vs_dEnergy_patch_large_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_pl_vs_SIJ100_recalc_new_path_MEAN_min_all, p_dEnergy_pl_vs_QIJ100_recalc_new_path_MEAN_min_all, p_dEnergy_pl_vs_BLA100_recalc_new_path_MEAN_min_all, p_dEnergy_pl_vs_SIJ100_recalc_new_path_MEAN_rep_all, p_dEnergy_pl_vs_QIJ100_recalc_new_path_MEAN_rep_all, p_dEnergy_pl_vs_BLA100_recalc_new_path_MEAN_rep_all, common.legend = TRUE)
+dev.off()
+
+
+####  BLOS62, Small patch  
+p_dEnergy_ps_vs_SIJ62_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_small", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Minimized")
+p_dEnergy_ps_vs_SIJ62_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_small", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Repacked")
+p_dEnergy_ps_vs_QIJ62_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_small", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Minimized")
+p_dEnergy_ps_vs_QIJ62_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_small", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Repacked")
+p_dEnergy_ps_vs_BLA62_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_small", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Minimized")
+p_dEnergy_ps_vs_BLA62_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_small", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Repacked")
+
+####  BLOS100, Small patch
+p_dEnergy_ps_vs_SIJ100_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_small", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Minimized")
+p_dEnergy_ps_vs_SIJ100_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_small", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Repacked")
+p_dEnergy_ps_vs_QIJ100_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_small", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Minimized")
+p_dEnergy_ps_vs_QIJ100_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_small", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Repacked")
+p_dEnergy_ps_vs_BLA100_recalc_new_path_MEAN_min_all <- plot_dEnergy_vs_blos("Mutated", "patch_small", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Minimized")
+p_dEnergy_ps_vs_BLA100_recalc_new_path_MEAN_rep_all <- plot_dEnergy_vs_blos("Mutated_repacked", "patch_small", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Atlas small", "All mutated residues, Repacked")
+
+png("Blos62_recalc_new_path_MEAN_vs_dEnergy_patch_small_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_ps_vs_SIJ62_recalc_new_path_MEAN_min_all, p_dEnergy_ps_vs_QIJ62_recalc_new_path_MEAN_min_all, p_dEnergy_ps_vs_BLA62_recalc_new_path_MEAN_min_all, p_dEnergy_ps_vs_SIJ62_recalc_new_path_MEAN_rep_all, p_dEnergy_ps_vs_QIJ62_recalc_new_path_MEAN_rep_all, p_dEnergy_ps_vs_BLA62_recalc_new_path_MEAN_rep_all, common.legend = TRUE) 
+dev.off()
+
+png("Blo100_recalc_new_path_MEAN_vs_dEnergy_patch_small_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_ps_vs_SIJ100_recalc_new_path_MEAN_min_all, p_dEnergy_ps_vs_QIJ100_recalc_new_path_MEAN_min_all, p_dEnergy_ps_vs_BLA100_recalc_new_path_MEAN_min_all, p_dEnergy_ps_vs_SIJ100_recalc_new_path_MEAN_rep_all, p_dEnergy_ps_vs_QIJ100_recalc_new_path_MEAN_rep_all, p_dEnergy_ps_vs_BLA100_recalc_new_path_MEAN_rep_all, common.legend = TRUE)
+dev.off()
+  
+
+
+```
+
+
+
+       Plot Blosum scores vs the absolute values of dEnergy for only contacting substitutions  (FIGURE 3). 
+       
+#dEnergy was calculated using different variations of Rosetta scoring functions for repacked and minimized modeled structures
+
+```{r Plot Blosum vs dEnergy , echo=FALSE}
+#################################   Blosum contacting
+
+data_blos=test_new_blosum_scores
+plot_dEnergy_vs_blos_cont <- function(optimization = "Mutated", energy = "OLD", blos_index = "SIJ.62.recalc.mean", x_lab = "SIJ62.v2", main_title="SIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", sub_title = "Contacting residues, Minimized") {
+
+  data_blos %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1, mean.pdb.min.distance != "none", !is.na(mean.pdb.min.distance)) %>% dplyr::select(-mean.pdb.min.distance) %>% unique %>% ggscatter(x = blos_index, y="mean.pdb.abs.dEnergy", add = "reg.line", conf.int = TRUE,cor.coef = TRUE, cor.method = "pearson", color = "chain.type",ellipse = TRUE, shape = "chain.type", palette = c("#da0017", "#2c69a9")) + xlab(x_lab) + ylab("abs.dEnergy") + stat_cor(aes(color = chain.type), label.x = -0.0, label.y = c(9.0,8), show.legend = TRUE, label.x.npc = "left", label.y.npc = "bottom", hjust = 1)+ labs(title = main_title, subtitle = sub_title) + theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+}
+
+
+####  BLOS62, contacting, Rosetta   
+p_dEnergy_vs_SIJ62_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "OLD", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Minimized")
+p_dEnergy_vs_SIJ62_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "OLD", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Repacked")
+p_dEnergy_vs_QIJ62_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "OLD", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Minimized")
+p_dEnergy_vs_QIJ62_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "OLD", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Repacked")
+p_dEnergy_vs_BLA62_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "OLD", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Minimized")
+p_dEnergy_vs_BLA62_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "OLD", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Repacked")
+
+####  BLOS100, contacting, Rosetta
+p_dEnergy_vs_SIJ100_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "OLD", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Minimized")
+p_dEnergy_vs_SIJ100_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "OLD", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Repacked")
+p_dEnergy_vs_QIJ100_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "OLD", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Minimized")
+p_dEnergy_vs_QIJ100_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "OLD", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Repacked")
+p_dEnergy_vs_BLA100_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "OLD", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Minimized")
+p_dEnergy_vs_BLA100_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "OLD", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Rosetta", "Contacting residues, Repacked")
+
+png("Blos62_recalc_new_path_MEAN_vs_dEnergy_Rosetta_cont_2021_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_vs_SIJ62_recalc_new_path_MEAN_min_cont, p_dEnergy_vs_QIJ62_recalc_new_path_MEAN_min_cont, p_dEnergy_vs_BLA62_recalc_new_path_MEAN_min_cont, p_dEnergy_vs_SIJ62_recalc_new_path_MEAN_rep_cont, p_dEnergy_vs_QIJ62_recalc_new_path_MEAN_rep_cont, p_dEnergy_vs_BLA62_recalc_new_path_MEAN_rep_cont, common.legend = TRUE) 
+dev.off()
+
+png("Blo100_recalc_new_path_MEAN_vs_dEnergy_Rosetta_cont_2021_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_vs_SIJ100_recalc_new_path_MEAN_min_cont, p_dEnergy_vs_QIJ100_recalc_new_path_MEAN_min_cont, p_dEnergy_vs_BLA100_recalc_new_path_MEAN_min_cont, p_dEnergy_vs_SIJ100_recalc_new_path_MEAN_rep_cont, p_dEnergy_vs_QIJ100_recalc_new_path_MEAN_rep_cont, p_dEnergy_vs_BLA100_recalc_new_path_MEAN_rep_cont, common.legend = TRUE)
+dev.off()
+########### 
+
+####  BLOS62, contacting, Large patch    
+p_dEnergy_pl_vs_SIJ62_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_large", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Minimized")
+p_dEnergy_pl_vs_SIJ62_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_large", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Repacked")
+p_dEnergy_pl_vs_QIJ62_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_large", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Minimized")
+p_dEnergy_pl_vs_QIJ62_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_large", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Repacked")
+p_dEnergy_pl_vs_BLA62_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_large", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Minimized")
+p_dEnergy_pl_vs_BLA62_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_large", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Repacked")
+
+####  BLOS100, contacting, Large patch
+p_dEnergy_pl_vs_SIJ100_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_large", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Minimized")
+p_dEnergy_pl_vs_SIJ100_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_large", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Repacked")
+p_dEnergy_pl_vs_QIJ100_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_large", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Minimized")
+p_dEnergy_pl_vs_QIJ100_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_large", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Repacked")
+p_dEnergy_pl_vs_BLA100_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_large", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Minimized")
+p_dEnergy_pl_vs_BLA100_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_large", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Atlas large", "Contacting residues, Repacked")
+
+png("Blos62_recalc_new_path_MEAN_vs_dEnergy_patch_large_cont_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_pl_vs_SIJ62_recalc_new_path_MEAN_min_cont, p_dEnergy_pl_vs_QIJ62_recalc_new_path_MEAN_min_cont, p_dEnergy_pl_vs_BLA62_recalc_new_path_MEAN_min_cont, p_dEnergy_pl_vs_SIJ62_recalc_new_path_MEAN_rep_cont, p_dEnergy_pl_vs_QIJ62_recalc_new_path_MEAN_rep_cont, p_dEnergy_pl_vs_BLA62_recalc_new_path_MEAN_rep_cont, common.legend = TRUE) 
+dev.off()
+
+png("Blo100_recalc_new_path_MEAN_vs_dEnergy_patch_large_cont_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_pl_vs_SIJ100_recalc_new_path_MEAN_min_cont, p_dEnergy_pl_vs_QIJ100_recalc_new_path_MEAN_min_cont, p_dEnergy_pl_vs_BLA100_recalc_new_path_MEAN_min_cont, p_dEnergy_pl_vs_SIJ100_recalc_new_path_MEAN_rep_cont, p_dEnergy_pl_vs_QIJ100_recalc_new_path_MEAN_rep_cont, p_dEnergy_pl_vs_BLA100_recalc_new_path_MEAN_rep_cont, common.legend = TRUE)
+dev.off()
+
+########### 
+
+####  BLOS62, contacting, Small patch    
+p_dEnergy_sp_vs_SIJ62_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_small", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Minimized")
+p_dEnergy_sp_vs_SIJ62_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_small", "SIJ.62.recalc.mean", "SIJ62.v2", "SIJ 62 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Repacked")
+p_dEnergy_sp_vs_QIJ62_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_small", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Minimized")
+p_dEnergy_sp_vs_QIJ62_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_small", "QIJ.62.recalc.mean", "QIJ62.v2", "QIJ 62 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Repacked")
+p_dEnergy_sp_vs_BLA62_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_small", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Minimized")
+p_dEnergy_sp_vs_BLA62_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_small", "BLA.62.recalc.mean", "BLA62.v2", "BLA 62 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Repacked")
+
+####  BLOS100, contacting, Small patch
+p_dEnergy_sp_vs_SIJ100_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_small", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Minimized")
+p_dEnergy_sp_vs_SIJ100_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_small", "SIJ.100.recalc.mean", "SIJ100.v2", "SIJ 100 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Repacked")
+p_dEnergy_sp_vs_QIJ100_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_small", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Minimized")
+p_dEnergy_sp_vs_QIJ100_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_small", "QIJ.100.recalc.mean", "QIJ100.v2", "QIJ 100 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Repacked")
+p_dEnergy_sp_vs_BLA100_recalc_new_path_MEAN_min_cont <- plot_dEnergy_vs_blos_cont("Mutated", "patch_small", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Minimized")
+p_dEnergy_sp_vs_BLA100_recalc_new_path_MEAN_rep_cont <- plot_dEnergy_vs_blos_cont("Mutated_repacked", "patch_small", "BLA.100.recalc.mean", "BLA100.v2", "BLA 100 (recalc) scores vs dEnergy (Abs), Atlas small", "Contacting residues, Repacked")
+
+png("Blos62_recalc_new_path_MEAN_vs_dEnergy_small_patch_cont_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_sp_vs_SIJ62_recalc_new_path_MEAN_min_cont, p_dEnergy_sp_vs_QIJ62_recalc_new_path_MEAN_min_cont, p_dEnergy_sp_vs_BLA62_recalc_new_path_MEAN_min_cont, p_dEnergy_sp_vs_SIJ62_recalc_new_path_MEAN_rep_cont, p_dEnergy_sp_vs_QIJ62_recalc_new_path_MEAN_rep_cont, p_dEnergy_sp_vs_BLA62_recalc_new_path_MEAN_rep_cont, common.legend = TRUE) 
+dev.off()
+
+png("Blo100_recalc_new_path_MEAN_vs_dEnergy_small_patch_cont_2022_NEW_10_2022.png", width =5300, height = 3300, res = 300)
+ggarrange(p_dEnergy_sp_vs_SIJ100_recalc_new_path_MEAN_min_cont, p_dEnergy_sp_vs_QIJ100_recalc_new_path_MEAN_min_cont, p_dEnergy_sp_vs_BLA100_recalc_new_path_MEAN_min_cont, p_dEnergy_sp_vs_SIJ100_recalc_new_path_MEAN_rep_cont, p_dEnergy_sp_vs_QIJ100_recalc_new_path_MEAN_rep_cont, p_dEnergy_sp_vs_BLA100_recalc_new_path_MEAN_rep_cont, common.legend = TRUE)
+dev.off()
+
+
+#
+```
+
+
+
+
+  Calculate correlations between  Blosum scores and the absolute values of dEnergy (Part of the data presented in Table 2). (PART1)
+       
+#dEnergy was calculated using different variations of Rosetta scoring functions for repacked and minimized modeled structures
+
+
+```{r correlation between Blosum vs dEnergy (data), echo=FALSE}
+library(reshape2)
+library(Hmisc)
+##################  WRITE BLOSUM CONTACTING RESIDUES STAT FILE
+
+data_blos=test_new_blosum_scores
+result_df <- data.frame(matrix(ncol = 5, nrow = 0))
+col_names <- c("Blosum.index", "Pearson.correlation", "P.Value", "energy.type", "mutation.type")
+colnames(result_df) <- col_names
+
+for (energy in c(data_blos %>% .$energy.type %>% unique())){
+ # print(energy)
+  for (optimization in c(data_blos %>% .$mutation.type %>% unique())) {
+    print(c(energy, optimization))
+     blos_index_sel1 = "SIJ.62.recalc.mean"
+     blos_index_sel2 = "QIJ.62.recalc.mean"
+     blos_index_sel3 = "BLA.62.recalc.mean"
+    
+     data_blos %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1, mean.pdb.min.distance != "none", !is.na(mean.pdb.min.distance)) %>% dplyr::select(-mean.pdb.min.distance) %>% unique  %>% dplyr::select(mean.pdb.abs.dEnergy, blos_index_sel1, blos_index_sel2, blos_index_sel3) %>% as.matrix() %>% rcorr() %>% .$r %>%  melt() %>% filter(Var2 == "mean.pdb.abs.dEnergy", Var1 != "mean.pdb.abs.dEnergy") %>% dplyr::select(-Var2) -> tmp_R_df
+  names(tmp_R_df)[1] <- "Blosum.index"
+  names(tmp_R_df)[2] <- "Pearson.correlation"
+
+  data_blos %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1, mean.pdb.min.distance != "none", !is.na(mean.pdb.min.distance)) %>% dplyr::select(-mean.pdb.min.distance) %>% unique  %>% dplyr::select(mean.pdb.abs.dEnergy, blos_index_sel1, blos_index_sel2, blos_index_sel3) %>% as.matrix() %>% rcorr() %>% .$P %>%  melt() %>% filter(Var2 == "mean.pdb.abs.dEnergy", Var1 != "mean.pdb.abs.dEnergy") %>% dplyr::select(-Var2) -> tmp_P_df
+  names(tmp_P_df)[1] <- "Blosum.index"
+  names(tmp_P_df)[2] <- "P.Value"
+  result_df_TMP <- cbind(tmp_R_df, tmp_P_df[2])
+  result_df_TMP$energy.type <- energy
+  result_df_TMP$mutation.type <- optimization
+  result_df <-rbind(result_df, result_df_TMP)
+  #############
+    blos_index_sel1 = "SIJ.100.recalc.mean"
+     blos_index_sel2 = "QIJ.100.recalc.mean"
+     blos_index_sel3 = "BLA.100.recalc.mean"
+     data_blos %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1, mean.pdb.min.distance != "none", !is.na(mean.pdb.min.distance)) %>% dplyr::select(-mean.pdb.min.distance) %>% unique  %>% dplyr::select(mean.pdb.abs.dEnergy, blos_index_sel1, blos_index_sel2, blos_index_sel3) %>% as.matrix() %>% rcorr() %>% .$r %>%  melt() %>% filter(Var2 == "mean.pdb.abs.dEnergy", Var1 != "mean.pdb.abs.dEnergy") %>% dplyr::select(-Var2) -> tmp_R_df
+  names(tmp_R_df)[1] <- "Blosum.index"
+  names(tmp_R_df)[2] <- "Pearson.correlation"
+
+data_blos %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1, mean.pdb.min.distance != "none", !is.na(mean.pdb.min.distance)) %>% dplyr::select(-mean.pdb.min.distance) %>% unique  %>% dplyr::select(mean.pdb.abs.dEnergy, blos_index_sel1, blos_index_sel2, blos_index_sel3) %>% as.matrix() %>% rcorr() %>% .$P %>%  melt() %>% filter(Var2 == "mean.pdb.abs.dEnergy", Var1 != "mean.pdb.abs.dEnergy") %>% dplyr::select(-Var2) -> tmp_P_df
+  names(tmp_P_df)[1] <- "Blosum.index"
+  names(tmp_P_df)[2] <- "P.Value"
+  result_df_TMP <- cbind(tmp_R_df, tmp_P_df[2])
+  result_df_TMP$energy.type <- energy
+  result_df_TMP$mutation.type <- optimization
+  result_df <-rbind(result_df, result_df_TMP)
+  }
+}
+cor_contact_blos100_recalc_all_stat <- result_df
+cor_contact_blos100_recalc_all_stat %>% write.csv(file="CORRELATION_contatced_BLOSUM_recalc_new_path_MEAN_vs_dEnergy_2022_NEW2_v2.dat")
+
+```
+
+    Calculate correlations between  Blosum scores and the absolute values of dEnergy (Part of the data presented in Table 2). (PART2)
+
+
+```{r Get correlation data for calculated  descriptors , echo=FALSE}
+
+##################  WRITE BLOSUM ALL RESIDUES STAT FILE
+
+data_blos=test_new_blosum_scores
+result_df <- data.frame(matrix(ncol = 5, nrow = 0))
+col_names <- c("Blosum.index", "Pearson.correlation", "P.Value", "energy.type", "mutation.type")
+colnames(result_df) <- col_names
+
+for (energy in c(data_blos %>% .$energy.type %>% unique())){
+ # print(energy)
+  for (optimization in c(data_blos %>% .$mutation.type %>% unique())) {
+    print(c(energy, optimization))
+     blos_index_sel1 = "SIJ.62.recalc.mean"
+     blos_index_sel2 = "QIJ.62.recalc.mean"
+     blos_index_sel3 = "BLA.62.recalc.mean"
+    
+     data_blos %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1) %>% dplyr::select(-mean.pdb.min.distance) %>% unique  %>% dplyr::select(mean.pdb.abs.dEnergy, blos_index_sel1, blos_index_sel2, blos_index_sel3) %>% as.matrix() %>% rcorr() %>% .$r %>%  melt() %>% filter(Var2 == "mean.pdb.abs.dEnergy", Var1 != "mean.pdb.abs.dEnergy") %>% dplyr::select(-Var2) -> tmp_R_df
+  names(tmp_R_df)[1] <- "Blosum.index"
+  names(tmp_R_df)[2] <- "Pearson.correlation"
+
+  data_blos %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1) %>% dplyr::select(-mean.pdb.min.distance) %>% unique  %>% dplyr::select(mean.pdb.abs.dEnergy, blos_index_sel1, blos_index_sel2, blos_index_sel3) %>% as.matrix() %>% rcorr() %>% .$P %>%  melt() %>% filter(Var2 == "mean.pdb.abs.dEnergy", Var1 != "mean.pdb.abs.dEnergy") %>% dplyr::select(-Var2) -> tmp_P_df
+  names(tmp_P_df)[1] <- "Blosum.index"
+  names(tmp_P_df)[2] <- "P.Value"
+  result_df_TMP <- cbind(tmp_R_df, tmp_P_df[2])
+  result_df_TMP$energy.type <- energy
+  result_df_TMP$mutation.type <- optimization
+  result_df <-rbind(result_df, result_df_TMP)
+  #############
+    blos_index_sel1 = "SIJ.100.recalc.mean"
+     blos_index_sel2 = "QIJ.100.recalc.mean"
+     blos_index_sel3 = "BLA.100.recalc.mean"
+     data_blos %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1) %>% dplyr::select(-mean.pdb.min.distance) %>% unique  %>% dplyr::select(mean.pdb.abs.dEnergy, blos_index_sel1, blos_index_sel2, blos_index_sel3) %>% as.matrix() %>% rcorr() %>% .$r %>%  melt() %>% filter(Var2 == "mean.pdb.abs.dEnergy", Var1 != "mean.pdb.abs.dEnergy") %>% dplyr::select(-Var2) -> tmp_R_df
+  names(tmp_R_df)[1] <- "Blosum.index"
+  names(tmp_R_df)[2] <- "Pearson.correlation"
+
+data_blos %>% filter(mutation.type == optimization & energy.type == energy, mean.pdb.abs.dEnergy <10 & mean.pdb.abs.dEnergy > 0.1) %>% dplyr::select(-mean.pdb.min.distance) %>% unique  %>% dplyr::select(mean.pdb.abs.dEnergy, blos_index_sel1, blos_index_sel2, blos_index_sel3) %>% as.matrix() %>% rcorr() %>% .$P %>%  melt() %>% filter(Var2 == "mean.pdb.abs.dEnergy", Var1 != "mean.pdb.abs.dEnergy") %>% dplyr::select(-Var2) -> tmp_P_df
+  names(tmp_P_df)[1] <- "Blosum.index"
+  names(tmp_P_df)[2] <- "P.Value"
+  result_df_TMP <- cbind(tmp_R_df, tmp_P_df[2])
+  result_df_TMP$energy.type <- energy
+  result_df_TMP$mutation.type <- optimization
+  result_df <-rbind(result_df, result_df_TMP)
+  }
+}
+cor_ALL_mutations_blos100_recalc_all_stat <- result_df
+cor_ALL_mutations_blos100_recalc_all_stat %>% write.csv(file="CORRELATION_ALL_mutations_BLOSUM_recalc_new_path_MEAN_vs_dEnergy_2022_NEW2_v2.dat")
+
+
+##
+```
+
+
+
+
+        Correlation analysis between descriptor values of contacting residues (CDR3- peptide)
+      Some data is presented in Fig.5 and Table 4
+
+
+```{r correlation analysis of descriptors, echo=FALSE}  
+########################################3 
+library(Hmisc)
+
+### group descriptors
+hydrophobic_cdr3 <- c('cdr3.Z1', 'cdr3.PP2', 'cdr3.F1', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.Blos1', 'cdr3.KF4', 'cdr3.KF10')
+steric_cdr3 <- c('cdr3.a.ms', 'cdr3.Z2', 'cdr3.F3', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.KF2')
+electronic_cdr3 <- c('cdr3.a.pah', 'cdr3.a.ec', 'cdr3.Z3', 'cdr3.PP1', 'cdr3.F6', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8')
+s_structure_cdr3 <- c('cdr3.a.pss', 'cdr3.F2', 'cdr3.Blos1', 'cdr3.Blos3', 'cdr3.KF1', 'cdr3.KF3', 'cdr3.KF5', 'cdr3.KF8')
+
+
+
+hydrophobic_p <- c('p.Z1', 'p.PP2', 'p.F1', 'p.VHSE1', 'p.VHSE2', 'p.Blos1', 'p.KF4', 'p.KF10')
+steric_p <- c('p.a.ms', 'p.Z2', 'p.F3', 'p.VHSE3', 'p.VHSE4', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.KF2')
+electronic_p <- c('p.a.pah', 'p.a.ec', 'p.Z3', 'p.PP1', 'p.F6', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8')
+s_structure_p <- c('p.a.pss', 'p.F2', 'p.Blos1', 'p.Blos3', 'p.KF1', 'p.KF3', 'p.KF5', 'p.KF8')
+#########################################
+
+cor_mean2_data_w_P_sel2 <- data.frame(matrix(ncol = 8, nrow = 0))
+col_names2 <- c("fdr", "Var1", "Var2", "value", "p.value", "test.lab", "contact.type", "Descriptor.type")
+colnames(cor_mean2_data_w_P_sel2) <- col_names2
+
+plot_descriptors_correlations <- function(optimization = "Mutated", energy = "OLD", cor_mean_data = "cor_mean_mut_ros_groups", cor_mean_data_w_P = "cor_mean_mut_ros_groups_w_P", cor_mean_data_w_P_sel = "cor_mean_mut_ros_groups_w_P_sel.csv", label1 = "Min.all", png_name_1 = "Descriptors_correlations_ALL_min_rosetta_grouped_S_TEST.png", cor_subtitle = "All contacting residues, Minimized", hist_label2 = "All contacting residues in minimized srtuctures", png_name_hist="HIST_Descriptors_correlations_ALL_min_rosetta_grouped_S_NEW_TEST.png", png_correlations_grouped="Descriptors_correlations_closest_rep_rosetta_SC_grouped_S_NEW_TEST.png")
+  {
+  data_descriptors %>% filter(resname.peptide != "none", mutation.type == optimization, energy.type == energy) %>% dplyr::select(c('resname.peptide', 'resn.mut.to', 'chain.type', 'cdr3.from', 'cdr3.to', 'peptide', 'resid.peptide', 'mutation.type', 'energy.type', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'mean.pdb.abs.dEnergy', 'resn.mut.from', 'resid.peptide.pdb', 'resid.cdr3.pose', 'cdr3.Z1', 'cdr3.PP2', 'cdr3.F1', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.Blos1', 'cdr3.KF4', 'cdr3.KF10', 'cdr3.a.ms', 'cdr3.Z2', 'cdr3.F3', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.KF2', 'cdr3.a.pah', 'cdr3.a.ec', 'cdr3.Z3', 'cdr3.PP1', 'cdr3.F6', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.a.pah', 'cdr3.a.ec', 'cdr3.Z3', 'cdr3.PP1', 'cdr3.F6', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.a.pss', 'cdr3.F2', 'cdr3.Blos1', 'cdr3.Blos3', 'cdr3.KF1', 'cdr3.KF3', 'cdr3.KF5', 'cdr3.KF8', 'p.Z1', 'p.PP2', 'p.F1', 'p.VHSE1', 'p.VHSE2', 'p.Blos1', 'p.KF4', 'p.KF10', 'p.a.ms', 'p.Z2', 'p.F3', 'p.VHSE3', 'p.VHSE4', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.KF2','p.a.pah', 'p.a.ec', 'p.Z3', 'p.PP1', 'p.F6', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8', 'p.a.pss', 'p.F2', 'p.Blos1', 'p.Blos3', 'p.KF1', 'p.KF3', 'p.KF5', 'p.KF8')) %>% unique() %>% select(-c('resname.peptide', 'resn.mut.to', 'chain.type', 'cdr3.from', 'cdr3.to', 'peptide', 'resid.peptide', 'mutation.type', 'energy.type', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'mean.pdb.abs.dEnergy', 'resn.mut.from', 'resid.peptide.pdb', 'resid.cdr3.pose')) %>% as.matrix() %>% rcorr(type ="spearman") -> cor_mean_data
+  
+  cor_mean_data$P %>% melt() -> cor_mean_data_w_P
+  names(cor_mean_data_w_P)[3] <- 'p.value'
+  cor_mean_data$r %>% melt() %>% merge(cor_mean_data_w_P) -> cor_mean_data_w_P
+  cor_mean_data_w_P$p.value %>% p.adjust(method="bonferroni") %>% cbind(cor_mean_data_w_P) -> cor_mean_data_w_P
+  names(cor_mean_data_w_P)[1] <- 'fdr'
+  cor_mean_data_w_P$test.lab <- cut(cor_mean_data_w_P$fdr, breaks = c(-Inf, 0.001, 0.01, 0.05),label=c("***", "** ", "*  "))
+
+  cor_mean_data_w_P$contact.type <- label1
+    cor_mean_data_w_P %>% filter(Var2 %in% hydrophobic_p & Var1 %in% hydrophobic_cdr3) %>% add_column(Descriptor.type = "Hydrophobic") -> cor_mean2_data_w_P_sel2
+  cor_mean_data_w_P %>% filter(Var2 %in% steric_p & Var1 %in% steric_cdr3) %>% add_column(Descriptor.type = "Steric") %>% rbind(cor_mean2_data_w_P_sel2)-> cor_mean2_data_w_P_sel2
+  cor_mean_data_w_P %>% filter(Var2 %in% electronic_p & Var1 %in% electronic_cdr3) %>% add_column(Descriptor.type = "Electronic") %>% rbind(cor_mean2_data_w_P_sel2)-> cor_mean2_data_w_P_sel2
+  cor_mean_data_w_P %>% filter(Var2 %in% s_structure_p & Var1 %in% s_structure_cdr3) %>% add_column(Descriptor.type = "SS") %>% rbind(cor_mean2_data_w_P_sel2)-> cor_mean2_data_w_P_sel2
+  cor_mean2_data_w_P_sel2 %>% write.csv(file=cor_mean_data_w_P_sel)
+
+  cor_mean_data_w_P %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% ggplot(aes(Var2, Var1, fill= value))  + theme_bw() + geom_tile(colour = "black") + scale_fill_gradient(limits=c(-0.5, 0.5), low = "red",high = "green", na.value = "white", name = "Correlation") + theme(axis.text.x = element_text(angle = 45, hjust = 1),panel.grid.major = element_blank()) + geom_text(aes(label=test.lab),size=4,na.rm=TRUE) + labs(title="Correlation of descriptors", subtitle = cor_subtitle) +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("Peptide descriptors") + ylab("CDR3 descriptors") + annotate("rect", xmin=0.5, xmax=8.5, ymin=0.5, ymax=8.5, fill="transparent", col="blue", lwd=2) + annotate("rect", xmin=8.5, xmax=16.5, ymin=8.5, ymax=16.5, fill="transparent", col="black", lwd=2) + annotate("rect", xmin=16.5, xmax=24.5, ymin=16.5, ymax=24.5, fill="transparent", col="red", lwd=2) + annotate("rect", xmin=24.5, xmax=31.5, ymin=24.5, ymax=31.5, fill="transparent", col="white", lwd=2) + annotate('text', x = 2.3, y = 9.1, label = 'Hydrophobicity', color = 'blue', size = 6, alpha = 0.7) + annotate('text', x = 9.2, y = 17.1, label = 'Steric', color = 'black', size = 6, alpha = 0.7) + annotate('text', x = 17.8, y = 25.1, label = 'Electronic', color = 'red', size = 6, alpha = 0.7) + annotate('text', x = 26.8, y = 25.1, label = 'Secondary structure', color = 'white', size = 6, alpha = 0.7) -> P_tmp_all_correlations 
+
+    png(png_name_1, width = 5300, height = 3300, res = 300)
+   P_tmp_all_correlations #%>% print()
+ dev.off()
+
+
+  cor_mean_data$r %>% melt %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% dplyr::select('value') %>%  unlist() %>% as.numeric() %>% shapiro.test() -> cor_mean_data_groups_shapiro
+
+  cor_mean_data$r %>% melt %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% hydrophobic_p, Var1 %in% hydrophobic_cdr3)  %>% dplyr::select('value') %>%  unlist() %>% as.numeric() %>% shapiro.test() ->cor_mean_data_groups_shapiro_hydrophobic
+
+  cor_mean_data$r %>% melt %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% steric_p, Var1 %in% steric_cdr3)  %>% dplyr::select('value') %>%  unlist() %>% as.numeric() %>% shapiro.test() ->cor_mean_data_groups_shapiro_steric
+
+  cor_mean_data$r %>% melt %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% electronic_p, Var1 %in% electronic_cdr3)  %>% dplyr::select('value') %>%  unlist() %>% as.numeric() %>% shapiro.test() ->cor_mean_data_groups_shapiro_electronic
+
+  cor_mean_data$r %>% melt %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% s_structure_p, Var1 %in% s_structure_cdr3)  %>% dplyr::select('value') %>%  unlist() %>% as.numeric()%>% shapiro.test() ->cor_mean_data_groups_shapiro_s_structure
+
+#####3  ADD subtitle
+  png(png_name_hist, width= 5200, height = 1500, res = 300)
+  par(mfrow=c(1,4))
+  cor_mean_data$r %>% melt %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% hydrophobic_p, Var1 %in% hydrophobic_cdr3)  %>% dplyr::select('value') %>%  unlist() %>% as.numeric() %>% hist(col='steelblue', main=paste(hist_label2, " (Hydrophobic)", paste("Shapiro–Wilk P-value: ", cor_mean_data_groups_shapiro_hydrophobic$p.value %>% round(digits=5)), sep="\n"), xlab="Spearman correlation", xlim = range(-0.4, 0.4))
+
+  cor_mean_data$r %>% melt %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% steric_p, Var1 %in% steric_cdr3)  %>% dplyr::select('value') %>%  unlist() %>% as.numeric() %>% hist(col='steelblue', main=paste(hist_label2, " (Steric)", paste("Shapiro–Wilk P-value: ", cor_mean_data_groups_shapiro_steric$p.value %>% round(digits=5)), sep="\n"), xlab="Spearman correlation", xlim = range(-0.4, 0.4))
+
+  cor_mean_data$r %>% melt %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% electronic_p, Var1 %in% electronic_cdr3)  %>% dplyr::select('value') %>%  unlist() %>% as.numeric() %>% hist(col='steelblue', main=paste(hist_label2, "(Electronic)", paste("Shapiro–Wilk P-value: ", cor_mean_data_groups_shapiro_electronic$p.value %>% round(digits=5)), sep="\n"), xlab="Spearman correlation", xlim = range(-0.4, 0.4))
+
+  cor_mean_data$r %>% melt %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% s_structure_p, Var1 %in% s_structure_cdr3)  %>% dplyr::select('value') %>%  unlist() %>% as.numeric() %>% hist(col='steelblue', main=paste(hist_label2, "(SS)", paste("Shapiro–Wilk P-value: ", cor_mean_data_groups_shapiro_s_structure$p.value %>% round(digits=5)), sep="\n"), xlab="Spearman correlation", xlim = range(-0.4, 0.4))
+  dev.off()
+
+  
+  cor_mean_data_w_P %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% hydrophobic_p, Var1 %in% hydrophobic_cdr3) %>% ggplot(aes(Var2, Var1, fill= value))  + theme_bw() + geom_tile(colour = "black") + scale_fill_gradient(limits=c(-0.5, 0.5), low = "red",high = "green", na.value = "white", name = "Correlation") + theme(axis.text.x = element_text(angle = 45, hjust = 1),panel.grid.major = element_blank()) + geom_text(aes(label=test.lab),size=4,na.rm=TRUE) + labs(title="Correlation of descriptors. Hydrophobic", subtitle = cor_subtitle) +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("Peptide descriptors") + ylab("CDR3 descriptors") -> P_descriptor_cor_REP_closest_sc_hydrophobic
+
+  cor_mean_data_w_P %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% steric_p, Var1 %in% steric_cdr3) %>% ggplot(aes(Var2, Var1, fill= value))  + theme_bw() + geom_tile(colour = "black") + scale_fill_gradient(limits=c(-0.5, 0.5), low = "red",high = "green", na.value = "white", name = "Correlation") + theme(axis.text.x = element_text(angle = 45, hjust = 1),panel.grid.major = element_blank()) + geom_text(aes(label=test.lab),size=4,na.rm=TRUE) + labs(title="Correlation of descriptors. Steric", subtitle = cor_subtitle) +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("Peptide descriptors") + ylab("CDR3 descriptors") -> P_descriptor_cor_REP_closest_sc_steric
+
+  cor_mean_data_w_P %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% electronic_p, Var1 %in% electronic_cdr3) %>% ggplot(aes(Var2, Var1, fill= value))  + theme_bw() + geom_tile(colour = "black") + scale_fill_gradient(limits=c(-0.5, 0.5), low = "red",high = "green", na.value = "white", name = "Correlation") + theme(axis.text.x = element_text(angle = 45, hjust = 1),panel.grid.major = element_blank()) + geom_text(aes(label=test.lab),size=4,na.rm=TRUE) + labs(title="Correlation of descriptors. Electronic", subtitle = cor_subtitle) +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("Peptide descriptors") + ylab("CDR3 descriptors") -> P_descriptor_cor_REP_closest_sc_electronic
+
+  cor_mean_data_w_P %>% filter(startsWith(as.character(Var2), "p."), !startsWith(as.character(Var1), "p.")) %>% filter(Var2 %in% s_structure_p, Var1 %in% s_structure_cdr3) %>% ggplot(aes(Var2, Var1, fill= value))  + theme_bw() + geom_tile(colour = "black") + scale_fill_gradient(limits=c(-0.5, 0.5), low = "red",high = "green", na.value = "white", name = "Correlation") + theme(axis.text.x = element_text(angle = 45, hjust = 1),panel.grid.major = element_blank()) + geom_text(aes(label=test.lab),size=4,na.rm=TRUE) + labs(title="Correlation of descriptors S.Structure", subtitle = cor_subtitle) +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("Peptide descriptors") + ylab("CDR3 descriptors") -> P_descriptor_cor_REP_closest_sc_sstructure
+
+png(png_correlations_grouped, width =5200, height = 1200, res = 300)
+ggarrange(P_descriptor_cor_REP_closest_sc_hydrophobic, P_descriptor_cor_REP_closest_sc_steric, P_descriptor_cor_REP_closest_sc_electronic, P_descriptor_cor_REP_closest_sc_sstructure, common.legend = TRUE, legend="right", ncol = 4, nrow = 1) %>% print()
+dev.off()
+
+  return(cor_mean2_data_w_P_sel2)
+
+  }
+
+
+
+data_descriptors = all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors
+
+plot_descriptors_correlations("Mutated", "OLD", "cor_mean_mut_ros_groups", "cor_mean_mut_ros_groups_w_P", "cor_mean_mut_ros_groups_w_P_sel.csv", "Min.all", "FULL_Descriptors_correlations_ALL_min_rosetta_NEW.png", "All contacting residues, Minimized", "All contacting residues in minimized srtuctures", "HIST_Descriptors_correlations_ALL_min_rosetta_grouped_NEW.png", "Descriptors_correlations_ALL_min_grouped_NEW.png") %>% rbind(cor_mean2_data_w_P_sel2) -> cor_mean2_data_w_P_sel2
+
+plot_descriptors_correlations("Mutated_repacked", "OLD", "cor_mean_rep_ros_groups", "cor_mean_rep_ros_groups_w_P", "cor_mean_rep_ros_groups_w_P_sel.csv", "Rep.all", "FULL_Descriptors_correlations_ALL_rep_rosetta_NEW.png", "All contacting residues, Repacked", "All contacting residues in repacked srtuctures", "HIST_Descriptors_correlations_ALL_rep_rosetta_grouped_NEW.png", "Descriptors_correlations_ALL_rep_grouped_NEW.png") %>% rbind(cor_mean2_data_w_P_sel2) -> cor_mean2_data_w_P_sel2
+###
+
+data_descriptors = all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors
+data_descriptors %>% filter(resname.peptide != "none", min.distance == min.min.distance) -> data_descriptors
+
+plot_descriptors_correlations("Mutated", "OLD", "cor_closest_mean_mut_ros_groups", "cor_closest_mean_mut_ros_groups_w_P", "cor_closest_mean_mut_ros_groups_w_P_sel.csv", "Min.closest", "FULL_Descriptors_correlations_Closest_min_rosetta_NEW.png", "Closest contacting residues, Minimized", "Closest contacting residues in minimized srtuctures", "HIST_Descriptors_correlations_Closest_min_rosetta_grouped_NEW.png", "Descriptors_correlations_Closest_min_grouped_NEW.png") %>% rbind(cor_mean2_data_w_P_sel2) -> cor_mean2_data_w_P_sel2
+
+plot_descriptors_correlations("Mutated_repacked", "OLD", "cor_closest_mean_rep_ros_groups", "cor_closest_mean_rep_ros_groups_w_P", "cor_closest_mean_rep_ros_groups_w_P_sel.csv", "Rep.closest", "FULL_Descriptors_correlations_Closest_rep_rosetta_NEW.png", "Closest contacting residues, Repacked", "Closest contacting residues in repacked srtuctures", "HIST_Descriptors_correlations_Closest_rep_rosetta_grouped_NEW.png", "Descriptors_correlations_Closest_rep_grouped_NEW.png") %>% rbind(cor_mean2_data_w_P_sel2) -> cor_mean2_data_w_P_sel2
+###
+
+data_descriptors = all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors
+data_descriptors %>% filter(rin.contact.part != "none", rin.contact.part != "MC_MC") -> data_descriptors
+
+plot_descriptors_correlations("Mutated", "OLD", "cor_SC_mean_mut_ros_groups", "cor_SC_mean_mut_ros_groups_w_P", "cor_SC_mean_mut_ros_groups_w_P_sel.csv", "Min.SC", "FULL_Descriptors_correlations_SC_min_rosetta_NEW.png", "SC- contacting residues, Minimized", "SC- contacting residues in minimized srtuctures", "HIST_Descriptors_correlations_SC_min_rosetta_grouped_NEW.png", "Descriptors_correlations_SC_min_grouped_NEW.png") %>% rbind(cor_mean2_data_w_P_sel2) -> cor_mean2_data_w_P_sel2
+
+plot_descriptors_correlations("Mutated_repacked", "OLD", "cor_SC_mean_rep_ros_groups", "cor_SC_mean_rep_ros_groups_w_P", "cor_SC_mean_rep_ros_groups_w_P_sel.csv", "Rep.SC", "FULL_Descriptors_correlations_SC_rep_rosetta_NEW.png", "SC- contacting residues, Repacked", "SC- contacting residues in repacked srtuctures", "HIST_Descriptors_correlations_SC_rep_rosetta_grouped_NEW.png", "Descriptors_correlations_SC_rep_grouped_NEW.png") %>% rbind(cor_mean2_data_w_P_sel2) -> cor_mean2_data_w_P_sel2
+#####
+
+data_descriptors = all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors
+data_descriptors %>% filter(resname.peptide != "none", min.distance == min.min.distance, rin.contact.part != "none", rin.contact.part != "MC_MC") -> data_descriptors
+
+plot_descriptors_correlations("Mutated", "OLD", "cor_closest_SC_mean_mut_ros_groups", "cor_closest_SC_mean_mut_ros_groups_w_P", "cor_closest_SC_mean_mut_ros_groups_w_P_sel.csv", "Min.closest.SC", "FULL_Descriptors_correlations_Closest_SC_min_rosetta_NEW.png", "Closest SC- contacting residues, Minimized", "Closest SC- contacting residues in minimized srtuctures", "HIST_Descriptors_correlations_Closest_SC_min_rosetta_grouped_NEW.png", "Descriptors_correlations_Closest_SC_min_grouped_NEW.png") %>% rbind(cor_mean2_data_w_P_sel2) -> cor_mean2_data_w_P_sel2
+
+plot_descriptors_correlations("Mutated_repacked", "OLD", "cor_mean_closest_SC_rep_ros_groups", "cor_closest_SC_mean_rep_ros_groups_w_P", "cor_closest_SC_mean_rep_ros_groups_w_P_sel.csv", "Rep.closest.SC", "FULL_Descriptors_correlations_Closest_SC_rep_rosetta_NEW.png", "Closest SC- contacting residues, Repacked", "Closest SC- contacting residues in repacked srtuctures", "HIST_Descriptors_correlations_Closest_SC_rep_rosetta_grouped_NEW.png", "Descriptors_correlations_Closest_SC_rep_grouped_NEW.png") %>% rbind(cor_mean2_data_w_P_sel2) -> cor_mean2_data_w_P_sel2
+
+
+cor_mean2_data_w_P_sel2 %>% fwrite(file="All_descriptors_correlations_grouped.csv")
+cor_mean2_data_w_P_sel2 %>% filter(fdr <0.05) %>% fwrite(file="All_descriptors_correlations_significant_grouped.csv")
+
+
+
+```
+
+
+
+      
+      
+      Analysis of contacting residues in TCR-pMHC complexes, available in PDB data base. 
+
+Needed files for the first chunk:
+
+"Normal_pdbs_Min_energy_resid_list.csv" and "Normal_pdbs_Min_energy_resid_list_w_cdr3_pose.csv" - files, containing information about contacting residues with most valuable energy values
+
+
+```{r pressure, echo=FALSE}  
+#################  check normal pdb contacts
+norm_resid_min_energy <- read.csv(file="Normal_pdbs_Min_energy_resid_list.csv", header = T )
+norm_resid_min_energy_w_cdr3_pose <- read.csv(file="Normal_pdbs_Min_energy_resid_list_w_cdr3_pose.csv", header = T )
+
+
+ ##############################
+ #######################################33  plot contact pairs
+
+resn1_list <- c('A', 'R', 'N', 'D', 'C', 'E', 'Q', 'G', 'H', 'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W', 'Y', 'V')
+
+list_all_contacts_mut <- data.frame(matrix(ncol = 2, nrow = 0))
+x <- c("resname.peptide", "resn.mut.to")
+
+for (res1 in resn1_list)
+{
+  for (res2 in resn1_list)
+  {
+  list_all_contacts_mut <- list_all_contacts_mut %>% rbind(print(c(res1, res2)))
+  }
+}
+colnames(list_all_contacts_mut) <- x 
+ 
+ 
+#list_all_contacts %>% rename("resname.tcr" = "resn.mut.to") -> list_all_contacts_mut
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors %>% filter(resname.peptide != "none", mutation.type == "Mutated", energy.type == "OLD") %>% dplyr::select(c('resname.peptide', 'resn.mut.to', 'chain.type', 'cdr3.from', 'cdr3.to', 'peptide', 'resid.peptide', 'mutation.type', 'energy.type', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'mean.pdb.abs.dEnergy', 'resn.mut.from', 'resid.peptide.pdb', 'resid.cdr3.pose', 'cdr3.a.pah', 'cdr3.a.pss', 'cdr3.a.ms', 'cdr3.a.cc', 'cdr3.a.ec', 'cdr3.Z1', 'cdr3.Z2', 'cdr3.Z3', 'cdr3.Z4', 'cdr3.Z5', 'cdr3.PP1', 'cdr3.PP2', 'cdr3.PP3', 'cdr3.F1', 'cdr3.F2', 'cdr3.F3', 'cdr3.F4', 'cdr3.F5', 'cdr3.F6', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.Blos4', 'cdr3.Blos5', 'cdr3.Blos6', 'cdr3.Blos7', 'cdr3.Blos8', 'cdr3.Blos9', 'cdr3.Blos10', 'cdr3.KF1', 'cdr3.KF2', 'cdr3.KF3', 'cdr3.KF4', 'cdr3.KF5', 'cdr3.KF6', 'cdr3.KF7', 'cdr3.KF8', 'cdr3.KF9', 'cdr3.KF10', 'p.a.pah', 'p.a.pss', 'p.a.ms', 'p.a.cc', 'p.a.ec', 'p.Z1', 'p.Z2', 'p.Z3', 'p.Z4', 'p.Z5', 'p.PP1', 'p.PP2', 'p.PP3', 'p.F1', 'p.F2', 'p.F3', 'p.F4', 'p.F5', 'p.F6', 'p.VHSE1', 'p.VHSE2', 'p.VHSE3', 'p.VHSE4', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.Blos4', 'p.Blos5', 'p.Blos6', 'p.Blos7', 'p.Blos8', 'p.Blos9', 'p.Blos10', 'p.KF1', 'p.KF2', 'p.KF3', 'p.KF4', 'p.KF5', 'p.KF6', 'p.KF7', 'p.KF8', 'p.KF9', 'p.KF10')) %>% unique() %>% dplyr::select(c('resname.peptide', 'resn.mut.to')) %>% group_by(resname.peptide, resn.mut.to) %>% add_count() %>% unique() %>% merge(list_all_contacts_mut, all.y=TRUE) -> Mutated_minimized_all_contacts_num
+
+Mutated_minimized_all_contacts_num %>% as.data.frame %>% ggplot(aes(resn.mut.to, resname.peptide, fill= as.numeric(n))) + geom_tile(colour = "black") + scale_fill_gradient(limits=c(1, 75), low = "lightblue",high = "steelblue", na.value = "white", name = "Number of contacts")+ labs(title="Peptide - CDR3 contacts, minimized structures", subtitle = "All contacting residues") +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("CDR3 residue") + ylab("Peptide residue") -> P_Mutated_minimized_all_contacts_num
+
+###
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors %>% filter (resname.peptide != "none", min.distance == min.min.distance) %>% filter(mutation.type == "Mutated", energy.type == "OLD") %>% dplyr::select(c('resname.peptide', 'resn.mut.to', 'chain.type', 'cdr3.from', 'cdr3.to', 'peptide', 'resid.peptide', 'mutation.type', 'energy.type', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'mean.pdb.abs.dEnergy', 'resn.mut.from', 'resid.peptide.pdb', 'resid.cdr3.pose', 'cdr3.a.pah', 'cdr3.a.pss', 'cdr3.a.ms', 'cdr3.a.cc', 'cdr3.a.ec', 'cdr3.Z1', 'cdr3.Z2', 'cdr3.Z3', 'cdr3.Z4', 'cdr3.Z5', 'cdr3.PP1', 'cdr3.PP2', 'cdr3.PP3', 'cdr3.F1', 'cdr3.F2', 'cdr3.F3', 'cdr3.F4', 'cdr3.F5', 'cdr3.F6', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.Blos4', 'cdr3.Blos5', 'cdr3.Blos6', 'cdr3.Blos7', 'cdr3.Blos8', 'cdr3.Blos9', 'cdr3.Blos10', 'cdr3.KF1', 'cdr3.KF2', 'cdr3.KF3', 'cdr3.KF4', 'cdr3.KF5', 'cdr3.KF6', 'cdr3.KF7', 'cdr3.KF8', 'cdr3.KF9', 'cdr3.KF10', 'p.a.pah', 'p.a.pss', 'p.a.ms', 'p.a.cc', 'p.a.ec', 'p.Z1', 'p.Z2', 'p.Z3', 'p.Z4', 'p.Z5', 'p.PP1', 'p.PP2', 'p.PP3', 'p.F1', 'p.F2', 'p.F3', 'p.F4', 'p.F5', 'p.F6', 'p.VHSE1', 'p.VHSE2', 'p.VHSE3', 'p.VHSE4', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.Blos4', 'p.Blos5', 'p.Blos6', 'p.Blos7', 'p.Blos8', 'p.Blos9', 'p.Blos10', 'p.KF1', 'p.KF2', 'p.KF3', 'p.KF4', 'p.KF5', 'p.KF6', 'p.KF7', 'p.KF8', 'p.KF9', 'p.KF10')) %>% unique() %>% dplyr::select(c('resname.peptide', 'resn.mut.to')) %>% group_by(resname.peptide, resn.mut.to) %>% add_count() %>% unique() %>% merge(list_all_contacts_mut, all.y=TRUE) -> Mutated_minimized_closest_contacts_num
+
+Mutated_minimized_closest_contacts_num %>% as.data.frame %>% ggplot(aes(resn.mut.to, resname.peptide, fill= as.numeric(n))) + geom_tile(colour = "black") + scale_fill_gradient(limits=c(1, 75), low = "lightblue",high = "steelblue", na.value = "white", name = "Number of contacts")+ labs(title="Peptide - CDR3 contacts, minimized structures", subtitle = "Closest contacting residues") +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("CDR3 residue") + ylab("Peptide residue") -> P_Mutated_minimized_closest_contacts_num
+
+###
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors %>% filter(resname.peptide != "none", mutation.type == "Mutated", energy.type == "OLD") %>% filter(rin.contact.part != "none", rin.contact.part != "MC_MC") %>% dplyr::select(c('resname.peptide', 'resn.mut.to', 'chain.type', 'cdr3.from', 'cdr3.to', 'peptide', 'resid.peptide', 'mutation.type', 'energy.type', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'mean.pdb.abs.dEnergy', 'resn.mut.from', 'resid.peptide.pdb', 'resid.cdr3.pose', 'cdr3.a.pah', 'cdr3.a.pss', 'cdr3.a.ms', 'cdr3.a.cc', 'cdr3.a.ec', 'cdr3.Z1', 'cdr3.Z2', 'cdr3.Z3', 'cdr3.Z4', 'cdr3.Z5', 'cdr3.PP1', 'cdr3.PP2', 'cdr3.PP3', 'cdr3.F1', 'cdr3.F2', 'cdr3.F3', 'cdr3.F4', 'cdr3.F5', 'cdr3.F6', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.Blos4', 'cdr3.Blos5', 'cdr3.Blos6', 'cdr3.Blos7', 'cdr3.Blos8', 'cdr3.Blos9', 'cdr3.Blos10', 'cdr3.KF1', 'cdr3.KF2', 'cdr3.KF3', 'cdr3.KF4', 'cdr3.KF5', 'cdr3.KF6', 'cdr3.KF7', 'cdr3.KF8', 'cdr3.KF9', 'cdr3.KF10', 'p.a.pah', 'p.a.pss', 'p.a.ms', 'p.a.cc', 'p.a.ec', 'p.Z1', 'p.Z2', 'p.Z3', 'p.Z4', 'p.Z5', 'p.PP1', 'p.PP2', 'p.PP3', 'p.F1', 'p.F2', 'p.F3', 'p.F4', 'p.F5', 'p.F6', 'p.VHSE1', 'p.VHSE2', 'p.VHSE3', 'p.VHSE4', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.Blos4', 'p.Blos5', 'p.Blos6', 'p.Blos7', 'p.Blos8', 'p.Blos9', 'p.Blos10', 'p.KF1', 'p.KF2', 'p.KF3', 'p.KF4', 'p.KF5', 'p.KF6', 'p.KF7', 'p.KF8', 'p.KF9', 'p.KF10')) %>% unique() %>% dplyr::select(c('resname.peptide', 'resn.mut.to')) %>% group_by(resname.peptide, resn.mut.to) %>% add_count() %>% unique() %>% merge(list_all_contacts_mut, all.y=TRUE) -> Mutated_minimized_SC_contacts_num
+
+Mutated_minimized_SC_contacts_num %>% as.data.frame %>% ggplot(aes(resn.mut.to, resname.peptide, fill= as.numeric(n))) + geom_tile(colour = "black") + scale_fill_gradient(limits=c(1, 75), low = "lightblue",high = "steelblue", na.value = "white", name = "Number of contacts")+ labs(title="Peptide - CDR3 contacts, minimized structures", subtitle = "SC-contacting residues") +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("CDR3 residue") + ylab("Peptide residue") -> P_Mutated_minimized_SC_contacts_num
+
+###
+
+all_merged_file_w_energy_byres_selected_w_SASA_w_RIN_SC_w_min_cont_dist_VJ_with_MEAN_all_descriptors %>% filter (resname.peptide != "none", min.distance == min.min.distance) %>% filter(mutation.type == "Mutated", energy.type == "OLD") %>% filter(rin.contact.part != "none", rin.contact.part != "MC_MC") %>% dplyr::select(c('resname.peptide', 'resn.mut.to', 'chain.type', 'cdr3.from', 'cdr3.to', 'peptide', 'resid.peptide', 'mutation.type', 'energy.type', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'mean.pdb.abs.dEnergy', 'resn.mut.from', 'resid.peptide.pdb', 'resid.cdr3.pose', 'cdr3.a.pah', 'cdr3.a.pss', 'cdr3.a.ms', 'cdr3.a.cc', 'cdr3.a.ec', 'cdr3.Z1', 'cdr3.Z2', 'cdr3.Z3', 'cdr3.Z4', 'cdr3.Z5', 'cdr3.PP1', 'cdr3.PP2', 'cdr3.PP3', 'cdr3.F1', 'cdr3.F2', 'cdr3.F3', 'cdr3.F4', 'cdr3.F5', 'cdr3.F6', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.Blos4', 'cdr3.Blos5', 'cdr3.Blos6', 'cdr3.Blos7', 'cdr3.Blos8', 'cdr3.Blos9', 'cdr3.Blos10', 'cdr3.KF1', 'cdr3.KF2', 'cdr3.KF3', 'cdr3.KF4', 'cdr3.KF5', 'cdr3.KF6', 'cdr3.KF7', 'cdr3.KF8', 'cdr3.KF9', 'cdr3.KF10', 'p.a.pah', 'p.a.pss', 'p.a.ms', 'p.a.cc', 'p.a.ec', 'p.Z1', 'p.Z2', 'p.Z3', 'p.Z4', 'p.Z5', 'p.PP1', 'p.PP2', 'p.PP3', 'p.F1', 'p.F2', 'p.F3', 'p.F4', 'p.F5', 'p.F6', 'p.VHSE1', 'p.VHSE2', 'p.VHSE3', 'p.VHSE4', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.Blos4', 'p.Blos5', 'p.Blos6', 'p.Blos7', 'p.Blos8', 'p.Blos9', 'p.Blos10', 'p.KF1', 'p.KF2', 'p.KF3', 'p.KF4', 'p.KF5', 'p.KF6', 'p.KF7', 'p.KF8', 'p.KF9', 'p.KF10')) %>% unique() %>% dplyr::select(c('resname.peptide', 'resn.mut.to')) %>% group_by(resname.peptide, resn.mut.to) %>% add_count() %>% unique() %>% merge(list_all_contacts_mut, all.y=TRUE) -> Mutated_minimized_SC_closest_contacts_num
+
+Mutated_minimized_SC_closest_contacts_num %>% as.data.frame %>% ggplot(aes(resn.mut.to, resname.peptide, fill= as.numeric(n))) + geom_tile(colour = "black") + scale_fill_gradient(limits=c(1, 75), low = "lightblue",high = "steelblue", na.value = "white", name = "Number of contacts")+ labs(title="Peptide - CDR3 contacts, minimized structures", subtitle = "Closest SC-contacting residues") +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("CDR3 residue") + ylab("Peptide residue") -> P_Mutated_minimized_SC_closest_contacts_num
+
+
+png("Contacting_resudues_in_Mutated_Minimized_strucutres.png", width =6000, height = 5300, res = 300)
+ggarrange(P_Mutated_minimized_all_contacts_num, P_Mutated_minimized_closest_contacts_num, P_Mutated_minimized_SC_contacts_num, P_Mutated_minimized_SC_closest_contacts_num, common.legend =TRUE, legend = "right")
+dev.off()
+
+getwd()
+
+```
+
+
+
+      Analysis of contacting residues in TCR-pMHC complexes, available in PDB data base. 
+
+Needed files for the first chunk:
+
+"Original_structures_w_descriptors_Art.csv" - file, containing information about TCR - pHMC contacting residues in original structures
+The results are preseinted in Fig.2
+ 
+ Amino acid names in the graph were reordered as follows: rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T")). The order was selected using hierarchial analysis (not shown)
+          
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+#######################  CONTACT STAT with Factors REORDERED hierarchial 
+Original_w_descriptors <- read.csv(file='Original_structures_w_descriptors_Art.csv')
+
+Original_w_descriptors %>% filter(complex.species == "Human", mhc.type == "MHCI", energy.type == "OLD") %>% dplyr::select(c('resname.peptide', 'resname.tcr', 'resid.tcr', 'chain.type', 'CDR3', 'peptide', 'resid.peptide', 'energy.type', 'allele.info', 'complex.species', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'cdr3.atcley.pah', 'cdr3.atcley.pss', 'cdr3.atcley.ms', 'cdr3.atcley.cc', 'cdr3.atcley.ec', 'cdr3.Z1', 'cdr3.Z2', 'cdr3.Z3', 'cdr3.Z4', 'cdr3.Z5', 'cdr3.PP1', 'cdr3.PP2', 'cdr3.PP3', 'cdr3.F1', 'cdr3.F2', 'cdr3.F3', 'cdr3.F4', 'cdr3.F5', 'cdr3.F6', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.Blos4', 'cdr3.Blos5', 'cdr3.Blos6', 'cdr3.Blos7', 'cdr3.Blos8', 'cdr3.Blos9', 'cdr3.Blos10', 'cdr3.KF1', 'cdr3.KF2', 'cdr3.KF3', 'cdr3.KF4', 'cdr3.KF5', 'cdr3.KF6', 'cdr3.KF7', 'cdr3.KF8', 'cdr3.KF9', 'cdr3.KF10', 'pept.atcley.pah', 'pept.atcley.pss', 'pept.atcley.ms', 'pept.atcley.cc', 'pept.atcley.ec', 'p.Z1', 'p.Z2', 'p.Z3', 'p.Z4', 'p.Z5', 'p.PP1', 'p.PP2', 'p.PP3', 'p.F1', 'p.F2', 'p.F3', 'p.F4', 'p.F5', 'p.F6', 'p.VHSE1', 'p.VHSE2', 'p.VHSE3', 'p.VHSE4', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.Blos4', 'p.Blos5', 'p.Blos6', 'p.Blos7', 'p.Blos8', 'p.Blos9', 'p.Blos10', 'p.KF1', 'p.KF2', 'p.KF3', 'p.KF4', 'p.KF5', 'p.KF6', 'p.KF7', 'p.KF8', 'p.KF9', 'p.KF10')) %>% unique() %>% dplyr::select(c('resname.peptide', 'resname.tcr')) %>% group_by(resname.peptide, resname.tcr) %>% add_count() %>% unique() %>% merge(list_all_contacts, all.y=TRUE) -> Norm_PDB_MHCI_human_all_contacts_num
+
+
+Original_w_descriptors %>% filter(complex.species == "Human", mhc.type == "MHCI", energy.type == "OLD", min.distance == min.min.distance) %>% dplyr::select(c('resname.peptide', 'resname.tcr', 'resid.tcr', 'chain.type', 'CDR3', 'peptide', 'resid.peptide', 'energy.type', 'allele.info', 'complex.species', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'cdr3.atcley.pah', 'cdr3.atcley.pss', 'cdr3.atcley.ms', 'cdr3.atcley.cc', 'cdr3.atcley.ec', 'cdr3.Z1', 'cdr3.Z2', 'cdr3.Z3', 'cdr3.Z4', 'cdr3.Z5', 'cdr3.PP1', 'cdr3.PP2', 'cdr3.PP3', 'cdr3.F1', 'cdr3.F2', 'cdr3.F3', 'cdr3.F4', 'cdr3.F5', 'cdr3.F6', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.Blos4', 'cdr3.Blos5', 'cdr3.Blos6', 'cdr3.Blos7', 'cdr3.Blos8', 'cdr3.Blos9', 'cdr3.Blos10', 'cdr3.KF1', 'cdr3.KF2', 'cdr3.KF3', 'cdr3.KF4', 'cdr3.KF5', 'cdr3.KF6', 'cdr3.KF7', 'cdr3.KF8', 'cdr3.KF9', 'cdr3.KF10', 'pept.atcley.pah', 'pept.atcley.pss', 'pept.atcley.ms', 'pept.atcley.cc', 'pept.atcley.ec', 'p.Z1', 'p.Z2', 'p.Z3', 'p.Z4', 'p.Z5', 'p.PP1', 'p.PP2', 'p.PP3', 'p.F1', 'p.F2', 'p.F3', 'p.F4', 'p.F5', 'p.F6', 'p.VHSE1', 'p.VHSE2', 'p.VHSE3', 'p.VHSE4', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.Blos4', 'p.Blos5', 'p.Blos6', 'p.Blos7', 'p.Blos8', 'p.Blos9', 'p.Blos10', 'p.KF1', 'p.KF2', 'p.KF3', 'p.KF4', 'p.KF5', 'p.KF6', 'p.KF7', 'p.KF8', 'p.KF9', 'p.KF10')) %>% unique() %>% dplyr::select(c('resname.peptide', 'resname.tcr')) %>% group_by(resname.peptide, resname.tcr) %>% add_count() %>% unique() %>% merge(list_all_contacts, all.y=TRUE) -> Norm_PDB_MHCI_human_closest_contacts_num
+
+
+Original_w_descriptors %>% filter(complex.species == "Human", mhc.type == "MHCI", energy.type == "OLD") %>% filter(rin.contact.part != "none", rin.contact.part != "MC_MC") %>% dplyr::select(c('resname.peptide', 'resname.tcr', 'resid.tcr', 'chain.type', 'CDR3', 'peptide', 'resid.peptide', 'energy.type', 'allele.info', 'complex.species', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'cdr3.atcley.pah', 'cdr3.atcley.pss', 'cdr3.atcley.ms', 'cdr3.atcley.cc', 'cdr3.atcley.ec', 'cdr3.Z1', 'cdr3.Z2', 'cdr3.Z3', 'cdr3.Z4', 'cdr3.Z5', 'cdr3.PP1', 'cdr3.PP2', 'cdr3.PP3', 'cdr3.F1', 'cdr3.F2', 'cdr3.F3', 'cdr3.F4', 'cdr3.F5', 'cdr3.F6', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.Blos4', 'cdr3.Blos5', 'cdr3.Blos6', 'cdr3.Blos7', 'cdr3.Blos8', 'cdr3.Blos9', 'cdr3.Blos10', 'cdr3.KF1', 'cdr3.KF2', 'cdr3.KF3', 'cdr3.KF4', 'cdr3.KF5', 'cdr3.KF6', 'cdr3.KF7', 'cdr3.KF8', 'cdr3.KF9', 'cdr3.KF10', 'pept.atcley.pah', 'pept.atcley.pss', 'pept.atcley.ms', 'pept.atcley.cc', 'pept.atcley.ec', 'p.Z1', 'p.Z2', 'p.Z3', 'p.Z4', 'p.Z5', 'p.PP1', 'p.PP2', 'p.PP3', 'p.F1', 'p.F2', 'p.F3', 'p.F4', 'p.F5', 'p.F6', 'p.VHSE1', 'p.VHSE2', 'p.VHSE3', 'p.VHSE4', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.Blos4', 'p.Blos5', 'p.Blos6', 'p.Blos7', 'p.Blos8', 'p.Blos9', 'p.Blos10', 'p.KF1', 'p.KF2', 'p.KF3', 'p.KF4', 'p.KF5', 'p.KF6', 'p.KF7', 'p.KF8', 'p.KF9', 'p.KF10')) %>% unique() %>% dplyr::select(c('resname.peptide', 'resname.tcr')) %>% group_by(resname.peptide, resname.tcr) %>% add_count() %>% unique() %>% merge(list_all_contacts, all.y=TRUE) -> Norm_PDB_MHCI_human_SC_contacts_num
+
+
+Original_w_descriptors %>% filter(complex.species == "Human", mhc.type == "MHCI", energy.type == "OLD", min.distance == min.min.distance) %>% filter(rin.contact.part != "none", rin.contact.part != "MC_MC") %>% dplyr::select(c('resname.peptide', 'resname.tcr', 'resid.tcr', 'chain.type', 'CDR3', 'peptide', 'resid.peptide', 'energy.type', 'allele.info', 'complex.species', 'mean.pdb.min.distance', 'mean.pdb.byres.energy', 'mean.pdb.total.energy', 'cdr3.atcley.pah', 'cdr3.atcley.pss', 'cdr3.atcley.ms', 'cdr3.atcley.cc', 'cdr3.atcley.ec', 'cdr3.Z1', 'cdr3.Z2', 'cdr3.Z3', 'cdr3.Z4', 'cdr3.Z5', 'cdr3.PP1', 'cdr3.PP2', 'cdr3.PP3', 'cdr3.F1', 'cdr3.F2', 'cdr3.F3', 'cdr3.F4', 'cdr3.F5', 'cdr3.F6', 'cdr3.VHSE1', 'cdr3.VHSE2', 'cdr3.VHSE3', 'cdr3.VHSE4', 'cdr3.VHSE5', 'cdr3.VHSE6', 'cdr3.VHSE7', 'cdr3.VHSE8', 'cdr3.Blos1', 'cdr3.Blos2', 'cdr3.Blos3', 'cdr3.Blos4', 'cdr3.Blos5', 'cdr3.Blos6', 'cdr3.Blos7', 'cdr3.Blos8', 'cdr3.Blos9', 'cdr3.Blos10', 'cdr3.KF1', 'cdr3.KF2', 'cdr3.KF3', 'cdr3.KF4', 'cdr3.KF5', 'cdr3.KF6', 'cdr3.KF7', 'cdr3.KF8', 'cdr3.KF9', 'cdr3.KF10', 'pept.atcley.pah', 'pept.atcley.pss', 'pept.atcley.ms', 'pept.atcley.cc', 'pept.atcley.ec', 'p.Z1', 'p.Z2', 'p.Z3', 'p.Z4', 'p.Z5', 'p.PP1', 'p.PP2', 'p.PP3', 'p.F1', 'p.F2', 'p.F3', 'p.F4', 'p.F5', 'p.F6', 'p.VHSE1', 'p.VHSE2', 'p.VHSE3', 'p.VHSE4', 'p.VHSE5', 'p.VHSE6', 'p.VHSE7', 'p.VHSE8', 'p.Blos1', 'p.Blos2', 'p.Blos3', 'p.Blos4', 'p.Blos5', 'p.Blos6', 'p.Blos7', 'p.Blos8', 'p.Blos9', 'p.Blos10', 'p.KF1', 'p.KF2', 'p.KF3', 'p.KF4', 'p.KF5', 'p.KF6', 'p.KF7', 'p.KF8', 'p.KF9', 'p.KF10')) %>% unique() %>% dplyr::select(c('resname.peptide', 'resname.tcr')) %>% group_by(resname.peptide, resname.tcr) %>% add_count() %>% unique() %>% merge(list_all_contacts, all.y=TRUE) -> Norm_PDB_MHCI_human_SC_closest_contacts_num
+
+
+
+
+Mutated_minimized_all_contacts_num %>% filter(!is.na(.$n)) %>% add_column(check = "+") %>% rename('mut.n' = 'n') %>% merge(Norm_PDB_MHCI_human_all_contacts_num, all.y=TRUE, by.x=c('resname.peptide', 'resn.mut.to'), by.y=c('resname.peptide', 'resname.tcr')) %>% rename("resname.tcr" = "resn.mut.to") %>% as.data.frame -> Mutated_minimized_all_contacts_num_factors
+Mutated_minimized_all_contacts_num_factors$resname.peptide <- factor(Mutated_minimized_all_contacts_num_factors$resname.peptide, levels = rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T")))
+Mutated_minimized_all_contacts_num_factors$resname.tcr <- factor(Mutated_minimized_all_contacts_num_factors$resname.tcr, levels = rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T")))
+Mutated_minimized_all_contacts_num_factors %>% ggplot(aes(resname.tcr, resname.peptide, fill= as.numeric(n))) + geom_tile(colour = "black") + scale_fill_gradient(limits=c(1, 75), low = "lightblue",high = "steelblue", na.value = "white", name = "Number of contacts")+ labs(title="Peptide - CDR3 contacts", subtitle = "All contacting residues") +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("CDR3 residue") + ylab("Peptide residue")+ geom_point(aes(size = mut.n), colour = "darkorchid3") -> P_Norm_PDB_MHCI_human_all_contacts_num_c_factors_clust
+
+###
+
+
+### with check_ mutated
+Mutated_minimized_closest_contacts_num %>% filter(!is.na(.$n)) %>% add_column(check = "+") %>% rename('mut.n' = 'n') %>% merge(Norm_PDB_MHCI_human_closest_contacts_num, all.y=TRUE, by.x=c('resname.peptide', 'resn.mut.to'), by.y=c('resname.peptide', 'resname.tcr')) %>% rename("resname.tcr" = "resn.mut.to") %>% as.data.frame -> Mutated_minimized_closest_contacts_num_factor 
+Mutated_minimized_closest_contacts_num_factor$resname.peptide <- factor(Mutated_minimized_closest_contacts_num_factor$resname.peptide, levels = rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T")))
+Mutated_minimized_closest_contacts_num_factor$resname.tcr <- factor(Mutated_minimized_closest_contacts_num_factor$resname.tcr, levels = rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T")))
+Mutated_minimized_closest_contacts_num_factor %>% ggplot(aes(resname.tcr, resname.peptide, fill= as.numeric(n))) + geom_tile(colour = "black") + scale_fill_gradient(limits=c(1, 75), low = "lightblue",high = "steelblue", na.value = "white", name = "Number of contacts")+ labs(title="Peptide - CDR3 contacts", subtitle = "Closest contacting residues") +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("CDR3 residue") + ylab("Peptide residue") + geom_point(aes(size = mut.n), colour = "darkorchid3") -> P_Norm_PDB_MHCI_human_closest_contacts_num_c_factors_clust
+
+
+###
+
+Mutated_minimized_SC_contacts_num %>% filter(!is.na(.$n)) %>% add_column(check = "+") %>% rename('mut.n' = 'n') %>% merge(Norm_PDB_MHCI_human_SC_contacts_num, all.y=TRUE, by.x=c('resname.peptide', 'resn.mut.to'), by.y=c('resname.peptide', 'resname.tcr')) %>% rename("resname.tcr" = "resn.mut.to") %>% as.data.frame -> Mutated_minimized_SC_contacts_num_factor
+Mutated_minimized_SC_contacts_num_factor$resname.peptide <- factor(Mutated_minimized_SC_contacts_num_factor$resname.peptide, levels = rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T")))
+Mutated_minimized_SC_contacts_num_factor$resname.tcr <- factor(Mutated_minimized_SC_contacts_num_factor$resname.tcr, levels = rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T")))
+Mutated_minimized_SC_contacts_num_factor %>% ggplot(aes(resname.tcr, resname.peptide, fill= as.numeric(n))) + geom_tile(colour = "black") + scale_fill_gradient(limits=c(1, 75), low = "lightblue",high = "steelblue", na.value = "white", name = "Number of contacts")+ labs(title="Peptide - CDR3 contacts", subtitle = "SC-contacting residues") +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("CDR3 residue") + ylab("Peptide residue")+ geom_point(aes(size = mut.n), colour = "darkorchid3") -> P_Norm_PDB_MHCI_human_SC_contacts_num_c_factors_clust
+  
+####
+
+
+### with check_ mutated
+Mutated_minimized_SC_closest_contacts_num %>% filter(!is.na(.$n)) %>% add_column(check = "+") %>% rename('mut.n' = 'n') %>% merge(Norm_PDB_MHCI_human_SC_closest_contacts_num, all.y=TRUE, by.x=c('resname.peptide', 'resn.mut.to'), by.y=c('resname.peptide', 'resname.tcr')) %>% rename("resname.tcr" = "resn.mut.to") %>% as.data.frame -> Mutated_minimized_SC_closest_contacts_num_factor
+Mutated_minimized_SC_closest_contacts_num_factor$resname.peptide <- factor(Mutated_minimized_SC_closest_contacts_num_factor$resname.peptide, levels = rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T")))
+Mutated_minimized_SC_closest_contacts_num_factor$resname.tcr <- factor(Mutated_minimized_SC_closest_contacts_num_factor$resname.tcr, levels = rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T")))
+Mutated_minimized_SC_closest_contacts_num_factor %>% ggplot(aes(resname.tcr, resname.peptide, fill= as.numeric(n))) + geom_tile(colour = "black") + scale_fill_gradient(limits=c(1, 75), low = "lightblue",high = "steelblue", na.value = "white", name = "Number of contacts")+ labs(title="Peptide - CDR3 contacts", subtitle = "Closest SC-contacting residues") +  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + xlab("CDR3 residue") + ylab("Peptide residue")+ geom_point(aes(size = mut.n), colour = "darkorchid3") -> P_Norm_PDB_MHCI_human_SC_closest_contacts_num_c_factors_clust
+
+
+png("Contacting_resudues_in_original_strucutres_factors_clust.png", width =6000, height = 5300, res = 300)
+ggarrange(P_Norm_PDB_MHCI_human_all_contacts_num_factors_clust, P_Norm_PDB_MHCI_human_closest_contacts_num_factors_clust, P_Norm_PDB_MHCI_human_SC_contacts_num_factors_clust, P_Norm_PDB_MHCI_human_SC_closest_contacts_num_factors_clust, common.legend =TRUE, legend = "right")
+dev.off()
+
+png("Contacting_resudues_in_original_strucutres_check_factors_clust.png", width =6000, height = 5300, res = 300)
+ggarrange(P_Norm_PDB_MHCI_human_all_contacts_num_c_factors_clust, P_Norm_PDB_MHCI_human_closest_contacts_num_c_factors_clust, P_Norm_PDB_MHCI_human_SC_contacts_num_c_factors_clust, P_Norm_PDB_MHCI_human_SC_closest_contacts_num_c_factors_clust, common.legend =TRUE, legend = "right")
+dev.off()
+getwd()
+
+#rev(c("K", "C", "H", "P", "E", "I", "M", "V", "R", "W", "A", "F", "Q", "G", "L", "S", "Y", "D", "N", "T"))
+
+
+
+
+```
