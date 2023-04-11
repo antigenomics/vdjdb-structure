@@ -1,5 +1,5 @@
 ---
-title: "Untitled"
+title: "Constructing CDR3:peptide contact maps for visualization"
 author: "M.S."
 date: '2023-03-01'
 output: html_document
@@ -201,5 +201,19 @@ meta.vdjdbweb %>%
                       "svg"))
 ```
 
+```{r message=F}
+meta.vdjdbweb %>%
+  rowwise() %>%
+  group_map(~ plot.pdb(.$pdb.file, .$antigen.epitope,
+                       .$cdr3.alpha, .$cdr3.beta) + ggtitle(.$pdb.id)) -> plt.list
+```
+
 ```{r}
+library(animation)
+saveGIF({
+  for(i in 1:211) {
+    print(plt.list[[i]])
+  }}, 
+  movie.name="test.gif",
+  interval = .2)
 ```
