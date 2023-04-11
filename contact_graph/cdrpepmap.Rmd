@@ -10,27 +10,23 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(MASS)
 library(ggplot2)
+library(stringr)
 select = dplyr::select
 ```
 
 ```{r message=F}
-DIST_CONT <- 4.5
-meta <- read_tsv("out_mir/general.txt.gz") %>%
-  left_join(read_tsv("out_mir/markup.txt.gz")) %>%
+meta <- read_tsv("pdb_orig/summary/general.txt.gz") %>%
+  left_join(read_tsv("pdb_orig/summary/markup.txt.gz")) %>%
   filter(region.type %in% c("CDR3", "PEPTIDE"))
-coords <- read_tsv("out_mir/resmarkup.txt.gz") %>%
-  left_join(read_tsv("out_mir/cacoord.txt.gz"))
-contacts.ca <- read_tsv("out_mir/cadist.txt.gz")
-contacts <- read_tsv("out_mir/atomdist.txt.gz") %>%
-  filter(dist <= DIST_CONT)
-
+coords <- read_tsv("pdb_orig/summary/resmarkup.txt.gz") %>%
+  left_join(read_tsv("pdb_orig/summary/cacoord.txt.gz"))
+contacts.ca <- read_tsv("pdb_orig/summary/cadist.txt.gz")
+contacts <- read_tsv("pdb_orig/summary/atomdist.txt.gz") %>%
+  filter(dist <= 4.5)
+  
 #coords %>%
 #  filter(pdb.id == "5d2l_al2.pdb", chain.id == "R") %>%
 #  arrange(residue.index)
-
-read_tsv("out_mir/resmarkup.txt.gz")  %>%
-  filter(pdb.id == "5d2l_al2.pdb", chain.id == "R") %>%
-  arrange(residue.index)
 
 #"NLVPMVATV"
 
