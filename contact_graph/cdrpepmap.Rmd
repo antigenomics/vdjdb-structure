@@ -16,6 +16,10 @@ select = dplyr::select
 
 ```{r message=F}
 meta <- read_tsv("pdb_orig/summary/general.txt.gz") %>%
+  group_by(pdb.id) %>%
+  mutate(species = complex.species[1], 
+         mhc.class = ifelse(any(chain.supertype == "MHCI"), "MHCI", "MHCII")) %>%
+  ungroup %>%
   left_join(read_tsv("pdb_orig/summary/markup.txt.gz")) %>%
   filter(region.type %in% c("CDR3", "PEPTIDE"))
 coords <- read_tsv("pdb_orig/summary/resmarkup.txt.gz") %>%
@@ -23,17 +27,6 @@ coords <- read_tsv("pdb_orig/summary/resmarkup.txt.gz") %>%
 contacts.ca <- read_tsv("pdb_orig/summary/cadist.txt.gz")
 contacts <- read_tsv("pdb_orig/summary/atomdist.txt.gz") %>%
   filter(dist <= 4.5)
-  
-#coords %>%
-#  filter(pdb.id == "5d2l_al2.pdb", chain.id == "R") %>%
-#  arrange(residue.index)
-
-#"NLVPMVATV"
-
-#contacts.ca %>%
-#  filter(pdb.id == "5d2l_al2.pdb", chain.id.to == "R")
-
-"CASSLAPGTTNEKLFF"
 ```
 
 ```{r}
@@ -57,21 +50,50 @@ get_coords <- function(id, antigen,
     mutate(i = 1:n()) %>%
     select(pdb.id, chain.id, region.type, 
            residue.index.pdb, residue.index, residue.aa, 
-           index, x, y, z, i)
+           index, x, y, z, i) %>%
+    filter(!is.na(x + y + z))
   
   mat.coords <- dat.coords %>%
     select(x, y, z) %>%
     as.matrix()
   rownames(mat.coords) <- dat.coords$i
   
-  pc <- mat.coords[-which(is.na(rowSums(mat.coords))), ] %>%
+  pc <- mat.coords %>%
     prcomp()
   
   left_join(dat.coords,
             tibble(i = attr(pc$x, "dimnames")[[1]] %>% as.integer,
-                   PC1 = scale(pc$x[,1]), PC2 = scale(pc$x[,2])))
+                   PC1 = scale(pc$x[,1]), 
+                   PC2 = scale(pc$x[,2])))
 }
+
+test.coords <- get_coords("5d2n_al2.pdb",
+                          "NLVPMVATV",
+                          "",
+                          "CASSLAPGTTNEKLFF")
+
+test.coords
 ```
+
+Beta only
+
+```{r}
+plt <- test.coords %>%
+  arrange(residue.index.pdb) %>%
+  ggplot(aes(x = PC1, y = PC2)) +
+  geom_path(aes(group = region.type, color = region.type)) +
+  geom_label(aes(label = residue.aa, fill = region.type),
+             color = "white") +
+  geom_text(aes(label = residue.index.pdb,
+                x = PC1 + 0.12, y = PC2 - 0.12), cex = 3) +
+  scale_color_brewer(guide = F, palette = "Set1") +
+  scale_fill_brewer(guide = F, palette = "Set1") +
+  theme_void() +
+  theme(aspect = 1)
+plt
+```
+
+Alpha and beta
 
 ```{r}
 test.coords <- get_coords("5d2n_al2.pdb",
@@ -96,6 +118,8 @@ plt <- test.coords %>%
 plt
 ```
 
+Alpha and beta plus contacts
+
 ```{r}
 get_contacts <- function(id) {
   contacts %>%
@@ -114,7 +138,7 @@ get_contacts <- function(id) {
 }
 
 test.contacts <- get_contacts("5d2n_al2.pdb") %>% 
-  merge(test.coords) %>%
+  left_join(test.coords) %>%
   unique
   
 test.contacts
@@ -122,6 +146,59 @@ test.contacts
 plt +
   geom_path(data = test.contacts , aes(group = contact.idx),
             linetype = "dotted", alpha = 0.5)
+```
+
+```{r}
+system("mkdir pdb_orig/out/")
+system("mkdir pdb_orig/out/pics")
+```
+
+```{r}
+meta.vdjdbweb <- meta %>%
+  mutate(pdb.file = pdb.id,
+         pdb.id = str_split_fixed(pdb.id, "[_\\.]", 2)[,1]) %>%
+  group_by(pdb.id, species, mhc.class, pdb.file) %>%
+  summarise(antigen.epitope = region.sequence[which(chain.type == "PEPTIDE")],
+            vj.alpha = allele.info[which(chain.type == "TRA")],
+            cdr3.alpha = region.sequence[which(chain.type == "TRA")],
+            cdr3.beta = region.sequence[which(chain.type == "TRB")],
+            vj.beta = allele.info[which(chain.type == "TRB")]) %>%
+  filter(!is.na(antigen.epitope) & nchar(antigen.epitope) < 40)
+
+write_tsv(meta.vdjdbweb, "pdb_orig/out/meta.vdjdbweb.txt")
+```
+
+```{r}
+plot.pdb <- function(pdb.file, antigen.epitope, cdr3.alpha, cdr3.beta) {
+  coords <- get_coords(pdb.file, antigen.epitope, 
+                       cdr3.alpha, cdr3.beta) 
+  
+  contacts <- get_contacts(pdb.file) %>% 
+    left_join(coords) %>%
+    unique
+  
+  coords %>%
+    arrange(residue.index.pdb) %>%
+    ggplot(aes(x = PC1, y = PC2)) +
+    geom_path(aes(group = region.type, color = region.type)) +
+    geom_path(data = contacts , aes(group = contact.idx),
+              linetype = "dotted", alpha = 0.5) +
+    geom_label(aes(label = residue.aa, fill = region.type),
+               color = "white") +
+    geom_text(aes(label = residue.index.pdb,
+                  x = PC1 + 0.12, y = PC2 - 0.12), cex = 3) +
+    scale_color_brewer(guide = F, palette = "Set1") +
+    scale_fill_brewer(guide = F, palette = "Set1") +
+    theme_void() +
+    theme(aspect = 1)
+}
+
+meta.vdjdbweb %>%
+  rowwise() %>%
+  group_walk(~ ggsave(paste0("pdb_orig/out/pics/", .$pdb.id, ".svg"),
+                      plot.pdb(.$pdb.file, .$antigen.epitope,
+                               .$cdr3.alpha, .$cdr3.beta), 
+                      "svg"))
 ```
 
 ```{r}
