@@ -13,7 +13,7 @@ library(ggplot2)
 select = dplyr::select
 ```
 
-```{r}
+```{r message=F}
 DIST_CONT <- 4.5
 meta <- read_tsv("out_mir/general.txt.gz") %>%
   left_join(read_tsv("out_mir/markup.txt.gz")) %>%
@@ -27,6 +27,10 @@ contacts <- read_tsv("out_mir/atomdist.txt.gz") %>%
 #coords %>%
 #  filter(pdb.id == "5d2l_al2.pdb", chain.id == "R") %>%
 #  arrange(residue.index)
+
+read_tsv("out_mir/resmarkup.txt.gz")  %>%
+  filter(pdb.id == "5d2l_al2.pdb", chain.id == "R") %>%
+  arrange(residue.index)
 
 #"NLVPMVATV"
 
@@ -122,4 +126,7 @@ test.contacts
 plt +
   geom_path(data = test.contacts , aes(group = contact.idx),
             linetype = "dotted", alpha = 0.5)
+```
+
+```{r}
 ```
