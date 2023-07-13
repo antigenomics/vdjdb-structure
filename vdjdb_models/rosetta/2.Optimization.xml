@@ -1,0 +1,126 @@
+<ROSETTASCRIPTS>
+  <SCOREFXNS>
+    <ScoreFunction name="fa_ref2015" weights="ref2015"/>
+    <ScoreFunction name="fa_ref2015_cst" weights="ref2015">
+      <Reweight scoretype="atom_pair_constraint" weight="1.0"/>
+      <Set fa_max_dis="9.0"/>
+    </ScoreFunction>
+  </SCOREFXNS>
+
+  <TASKOPERATIONS>
+  </TASKOPERATIONS>
+
+  <RESIDUE_SELECTORS>
+   <Chain name="pept_chain" chains="PEPTIDE_CHAIN"/>
+   <Chain name="MHCa" chains="MHCA_CHAIN"/>
+   <Chain name="MHCb" chains="MHCB_CHAIN"/>
+   <Chain name="MHC" chains="MHCA_CHAIN,MHCB_CHAIN"/>
+   <Chain name="tra_chain" chains="TCRA_CHAIN"/>
+   <Chain name="trb_chain" chains="TCRB_CHAIN"/>
+   <Chain name="TCR" chains="TCRA_CHAIN,TCRB_CHAIN"/>
+
+   ___ ALL RESIDUES CONTACTING WITH PEPTIDE
+   <Neighborhood name="Pept_cont_all" selector="pept_chain" distance="10.0"/>
+   <PrimarySequenceNeighborhood name="Pept_cont_all_adj_1" selector="Pept_cont_all" lower="1" upper="1"/>
+   <Not name="everythingelse_but_Pept_cont" selector="Pept_cont_all"/>
+   <Not name="everythingelse_but_Pept_cont_adj" selector="Pept_cont_all_adj_1"/>
+   
+   ___ TCR RESIDUES CONTACTING WITH PEPTIDE
+   <And name="TCR_vs_Pept" selectors="Pept_cont_all,TCR"/>
+   <And name="TCR_vs_Pept_adj" selectors="Pept_cont_all_adj_1,TCR"/>
+   <Not name="everythingelse_but_TCR_vs_Pept" selector="TCR_vs_Pept"/>
+   <Not name="everythingelse_but_TCR_vs_Pept_adj" selector="TCR_vs_Pept_adj"/>
+   
+   ___ TCRa RESIDUES CONTACTING WITH PEPTIDE
+   <And name="TCRa_vs_Pept" selectors="Pept_cont_all,tra_chain"/>
+   <And name="TCRa_vs_Pept_adj" selectors="Pept_cont_all_adj_1,tra_chain"/>
+   <Not name="everythingelse_but_TCRa_vs_Pept" selector="TCRa_vs_Pept"/>
+   <Not name="everythingelse_but_TCRa_vs_Pept_adj" selector="TCRa_vs_Pept_adj"/>
+
+   ___ TCRb RESIDUES CONTACTING WITH PEPTIDE
+   <And name="TCRb_vs_Pept" selectors="Pept_cont_all,trb_chain"/>
+   <And name="TCRb_vs_Pept_adj" selectors="Pept_cont_all_adj_1,trb_chain"/>
+   <Not name="everythingelse_but_TCRb_vs_Pept" selector="TCRb_vs_Pept"/>
+   <Not name="everythingelse_but_TCRb_vs_Pept_adj" selector="TCRb_vs_Pept_adj"/>
+
+   ___ MHC RESIDUES CONTACTING WITH PEPTIDE
+   <And name="MHC_vs_Pept" selectors="Pept_cont_all,MHC"/>
+   <And name="MHC_vs_Pept_adj" selectors="Pept_cont_all_adj_1,MHC"/>
+   <Not name="everythingelse_but_MHC_vs_Pept" selector="MHC_vs_Pept"/>
+   <Not name="everythingelse_but_MHC_vs_Pept_adj" selector="MHC_vs_Pept_adj"/>
+
+   ___ MHCa RESIDUES CONTACTING WITH PEPTIDE
+   <And name="MHCa_vs_Pept" selectors="Pept_cont_all,MHCa"/>
+   <And name="MHCa_vs_Pept_adj" selectors="Pept_cont_all_adj_1,MHCa"/>
+   <Not name="everythingelse_but_MHCa_vs_Pept" selector="MHCa_vs_Pept"/>
+   <Not name="everythingelse_but_MHCa_vs_Pept_adj" selector="MHCa_vs_Pept_adj"/>
+
+   ___ MHCb RESIDUES CONTACTING WITH PEPTIDE
+   <And name="MHCb_vs_Pept" selectors="Pept_cont_all,MHCb"/>
+   <And name="MHCb_vs_Pept_adj" selectors="Pept_cont_all_adj_1,MHCb"/>
+   <Not name="everythingelse_but_MHCb_vs_Pept" selector="MHCb_vs_Pept"/>
+   <Not name="everythingelse_but_MHCb_vs_Pept_adj" selector="MHCb_vs_Pept_adj"/>
+   ______________________________
+
+   ___ TCRa RESIDUES CONTACTING WITH TCRb
+    <Neighborhood name="trb_vs_tra" selector="tra_chain" distance="7.0"/>
+    <And name="trb_vs_tra2" selectors="trb_vs_tra,trb_chain"/>
+    <Neighborhood name="tra_vs_trb" selector="trb_chain" distance="7.0"/>            
+    <And name="tra_vs_trb2" selectors="tra_vs_trb,tra_chain"/>
+    <Or name="tra_trb_interface" selectors="tra_vs_trb2,trb_vs_tra2"/>
+   __________________________________________________________________
+    SELECT CONTACTING RESIDUES +1 (TRA vs TRB)
+     <PrimarySequenceNeighborhood name="tra_trb_interface_adj_1" selector="tra_trb_interface" lower="1" upper="1"/>
+   ________________________________________________________________
+     SELECT ALL THE REST
+   <Not name="everythingelse_but_tra_trb_interface_adj_1" selector="tra_trb_interface_adj_1"/>
+   <Not name="everythingelse_but_tra_trb_interface" selector="tra_trb_interface"/>
+   ________________________________________________________________
+  <Or name="TCR_and_MHC_and_pept_cont_adj" selectors="TCR_vs_Pept_adj,pept_chain,MHC_vs_Pept"/>
+  <Not name="everythingelse_but_TCR_and_MHC_and_pept_cont_adj" selector="TCR_and_MHC_and_pept_cont_adj"/>
+
+ </RESIDUE_SELECTORS>
+ <TASKOPERATIONS>
+	 <OperateOnResidueSubset name="repackonly" selector="TCR_and_MHC_and_pept_cont_adj">
+Pept_cont_all , Pept_cont_all_adj_1 , TCR_vs_Pept , TCR_vs_Pept_adj , TCRa_vs_Pept , TCRa_vs_Pept_adj , TCRb_vs_Pept , TCRb_vs_Pept_adj , MHC_vs_Pept , MHC_vs_Pept_adj , MHCa_vs_Pept , MHCa_vs_Pept_adj , MHCb_vs_Pept , MHCb_vs_Pept_adj , trb_vs_tra2 , tra_vs_trb2 , tra_trb_interface
+     <RestrictToRepackingRLT/>
+    </OperateOnResidueSubset>
+_
+    <OperateOnResidueSubset name="norepack" selector="everythingelse_but_TCR_and_MHC_and_pept_cont_adj">
+everythingelse_but_Pept_cont , everythingelse_but_Pept_cont_adj , everythingelse_but_TCR_vs_Pept , everythingelse_but_TCR_vs_Pept_adj , everythingelse_but_TCRa_vs_Pept , everythingelse_but_TCRa_vs_Pept_adj , everythingelse_but_TCRb_vs_Pept , everythingelse_but_TCRb_vs_Pept_adj , everythingelse_but_MHC_vs_Pept , everythingelse_but_MHC_vs_Pept_adj , everythingelse_but_MHCa_vs_Pept , everythingelse_but_MHCa_vs_Pept_adj , everythingelse_but_MHCb_vs_Pept , everythingelse_but_MHCb_vs_Pept_adj , everythingelse_but_tra_trb_interface_adj_1 , everythingelse_but_tra_trb_interface	
+    <PreventRepackingRLT/>
+    </OperateOnResidueSubset>
+ _
+    <UseMultiCoolAnnealer name="multicool" states="6"/>
+    <ExtraChiCutoff name="extrachizero" extrachi_cutoff="0"/>
+  </TASKOPERATIONS>
+  <FILTERS>
+  </FILTERS>
+  <MOVERS>
+    AddConstraintsToCurrentConformationMover name="addcst" use_distance_cst="0" coord_dev="0.5" min_seq_sep="0" max_distance="9" CA_only="1" bound_width="0.0" cst_weight="1.0"/>
+    <AddConstraintsToCurrentConformationMover name="addcst" use_distance_cst="1" coord_dev="1.0" min_seq_sep="0" CA_only="1" bound_width="0.0" cst_weight="1.0"/>
+    <ClearConstraintsMover name="clearcst"/>
+    <MinMover name="minimize" scorefxn="fa_ref2015_cst" chi="1" bb="1" type="lbfgs_armijo_nonmonotone" tolerance="0.000001" max_iter="300"/>
+    <PackRotamersMover name="repack" scorefxn="fa_ref2015" task_operations="repackonly,norepack"/>
+    <ScoreMover name="apply_score" scorefxn="fa_ref2015" verbose="0"/>
+
+  ___________  DEBUG   ______
+    <DeleteRegionMover name="test_selector" residue_selector="everythingelse_but_tra_trb_interface_adj_1"/>
+    <DumpPdb name="dump" fname="dump2.pdb" scorefxn="fa_ref2015"/>
+  ______________
+ </MOVERS>
+  <APPLY_TO_POSE>
+  </APPLY_TO_POSE>
+  <PROTOCOLS>
+	  <Add mover_name="repack"/>
+	  <Add mover_name="apply_score"/> 
+	  <Add mover_name="addcst"/>
+	  <Add mover_name="minimize"/>
+	  <Add mover_name="apply_score"/>
+	 
+	  Add mover_name="test_selector"/>
+ Add mover_name="dump"/>
+  
+  </PROTOCOLS>
+  <OUTPUT />
+</ROSETTASCRIPTS>

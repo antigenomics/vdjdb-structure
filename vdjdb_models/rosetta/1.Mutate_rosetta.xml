@@ -1,0 +1,16 @@
+<ROSETTASCRIPTS>
+    <TASKOPERATIONS>
+    </TASKOPERATIONS>
+    <SCOREFXNS>
+    </SCOREFXNS>
+    <FILTERS>
+    </FILTERS>
+    <MOVERS>
+        <MutateResidue name="mut" target="RESIDCHAIN" new_res="RESNAME" preserve_atom_coords="false" mutate_self="false" update_polymer_bond_dependent="false" />
+    </MOVERS>
+    <APPLY_TO_POSE>
+    </APPLY_TO_POSE>
+    <PROTOCOLS>
+	    <Add mover="mut"/>
+    </PROTOCOLS>
+</ROSETTASCRIPTS>

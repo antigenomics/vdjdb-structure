@@ -61,10 +61,17 @@ get_coords <- function(id, antigen,
   pc <- mat.coords %>%
     prcomp()
   
-  left_join(dat.coords,
-            tibble(i = attr(pc$x, "dimnames")[[1]] %>% as.integer,
-                   PC1 = scale(pc$x[,1]), 
-                   PC2 = scale(pc$x[,2])))
+  res <- left_join(dat.coords,
+                   tibble(i = attr(pc$x, "dimnames")[[1]] %>% as.integer,
+                          PC1 = scale(pc$x[,1]), 
+                          PC2 = scale(pc$x[,2])))
+  
+  pc2 <- with(res %>% filter(region.type == "PEPTIDE"),
+              prcomp(cbind(PC1, PC2)))
+  coords.new <- predict(pc2, cbind(res$PC1, res$PC2))
+  res$PC1 <- sign(coords.new[nrow(coords.new),1]) * coords.new[,1]
+  res$PC2 <- abs(coords.new[,2])
+  res
 }
 
 test.coords <- get_coords("5d2n_al2.pdb",
@@ -216,4 +223,7 @@ saveGIF({
   }}, 
   movie.name="test.gif",
   interval = .2)
+```
+
+```{r}
 ```
