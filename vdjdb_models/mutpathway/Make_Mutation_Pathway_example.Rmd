@@ -1,0 +1,235 @@
+---
+title: "Modeling CDR3 mutation pathway"
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "./")
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(reshape2)
+library(parallel)
+library(stringdist)
+library(Biostrings)
+library(stringr)
+select = dplyr::select
+```
+
+
+```{r check-wd}
+getwd()
+```
+
+```{r}
+resn3_list <- c('ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLU', 'GLN', 'GLY', 'HIS', 'ILE', 'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL')
+resn1_list <- c('A', 'R', 'N', 'D', 'C', 'E', 'Q', 'G', 'H', 'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W', 'Y', 'V')
+aa_dict <- data.frame(resn3_list, resn1_list)
+
+```
+
+
+Loading general structure annotations, rename columns in VDJdb style
+
+```{r}
+## load MIR annotation .jar script output files
+
+general_pdb <- fread("general.txt", blank.lines.skip = TRUE)
+markup_pdb <- fread("markup.txt", blank.lines.skip = TRUE)
+resmarkup_pdb <- fread("resmarkup.txt", blank.lines.skip = TRUE)
+
+ general_pdb %>%  merge(markup_pdb) %>%
+  group_by(pdb.id) %>%
+  mutate(species = ifelse(complex.species[1] == "Human", "HomoSapiens", "MusMusculus"),
+         antigen.epitope = region.sequence[which(region.type == "PEPTIDE")]) %>%
+  filter(region.type == "CDR3") %>%
+  mutate(vj.segm = allele.info, gene = chain.type, cdr3 = region.sequence) %>%
+  separate(vj.segm, c("v.segm", "j.segm"), sep = ":") %>%
+  select(pdb.id, species, antigen.epitope, gene, v.segm, j.segm, cdr3) %>%
+  ungroup -> pdb.annot
+pdb.annot  <- pdb.annot %>% mutate(cdr3.length = nchar(pdb.annot$cdr3),)
+
+fwrite(pdb.annot, "structures.in.vdjdb.txt", sep = "\t")
+```
+
+
+
+Load VDJdb and compute statistics for PDB records (same v-genes)
+
+```{r}
+##  merging PDBid's to vdjdb-slim, count number of entries with same gene (TCRa, TCRb),V-segm, epitopes and CDR3 lenths
+# load VDJdbdb
+vdjdb <- fread("vdjdb.slim.txt")
+
+vdjdb  <- vdjdb %>% mutate(cdr3.length = nchar(vdjdb$cdr3),)
+vdjdb.pdb_v_segm <- vdjdb %>%
+  merge(pdb.annot %>% select(-j.segm, -cdr3),
+        all.y = T, allow.cartesian = T) %>%
+  group_by(pdb.id, species, antigen.epitope, gene, v.segm ) %>%
+  summarise(count = sum(!is.na(cdr3))) %>%
+  dcast(pdb.id + species + antigen.epitope ~ gene, value.var = "count")
+
+vdjdb.pdb_v_segm %>%
+  head
+```
+
+
+
+Select first neighbors for PDB sequences (same V- and J-genes), Hamming distance (1) Same Peptide
+
+```{r}
+
+vdjdb_tmp <- vdjdb %>%
+  separate_rows(v.segm, sep = ",") %>%
+  separate_rows(j.segm, sep = ",") 
+
+  #mutate(v.segm = str_trim(v.segm),
+  #       j.segm = str_trim(j.segm))
+
+
+find_neighbours <- function(pdb.id = "XX",
+                            sp = "HomoSapiens",
+                            ae = "GILGFVFTL",
+                            ge = "TRB",
+                            v.segm.from = "VV",
+                            j.segm.from = "JJ",
+                            cdr3.from = "CASSSRSSYEQYF",
+                            hm.threshold = 1) {
+  to <- vdjdb_tmp %>%
+  filter(species == sp,
+         antigen.epitope == ae,
+         gene == ge,
+         v.segm == v.segm.from,
+         j.segm == j.segm.from) %>%
+  select(v.segm, j.segm, cdr3, antigen.epitope)
+  
+  if (nrow(to) == 0) {
+    return(data.frame())
+  }
+  
+  colnames(to) <- c("v.segm.to", "j.segm.to", "cdr3.to", "antigen.epitope.to")
+  
+  to$hm <- stringdistmatrix(cdr3.from, to$cdr3.to, method = "hamming")[1,]
+  to$v.segm.from <- v.segm.from
+  to$j.segm.from <- j.segm.from
+  to$cdr3.from <- cdr3.from
+  to$species <- sp
+  to$antigen.epitope.from <- ae
+  to$gene <- ge
+  to$pdb.id <- pdb.id
+  
+  to %>%
+    filter(hm <= hm.threshold, hm > 0) %>%
+    select(pdb.id, species, antigen.epitope.from, gene,
+           v.segm.from, j.segm.from, cdr3.from,
+           v.segm.to, j.segm.to, cdr3.to, antigen.epitope.to,
+           hm)
+}
+
+#find_neighbours()
+
+neighbors1_vj_hm_same_pept <- pdb.annot %>%
+  group_by(pdb.id, gene) %>%
+  do(find_neighbours(.$pdb.id, .$species, .$antigen.epitope, .$gene, .$v.segm, .$j.segm, .$cdr3))
+
+neighbors1_vj_hm_same_pept <- neighbors1_vj_hm_same_pept %>% filter(!cdr3.to %in% neighbors1_vj_hm_same_pept$cdr3.from)
+
+```
+
+
+Get second and third level neighbors, filter redundant ones (same v, j genes), Hamming distance (1)
+
+```{r}
+neighbors1_vj_hm_same_pept$order <- 1
+
+vdjdb_tmp <- vdjdb_tmp %>% filter(!cdr3 %in% c(neighbors1_vj_hm_same_pept$cdr3.to, neighbors1_vj_hm_same_pept$cdr3.from))
+  
+neighbors2_vj_hm_same_pept <- neighbors1_vj_hm_same_pept %>%
+  select(pdb.id, species, antigen.epitope.from, gene, v.segm.to, j.segm.to, cdr3.to) %>%
+  unique %>%
+  group_by(pdb.id, species, antigen.epitope.from, gene, v.segm.to, j.segm.to, cdr3.to) %>%
+  do(find_neighbours(.$pdb.id, .$species, .$antigen.epitope.from, .$gene, .$v.segm.to, .$j.segm.to, .$cdr3.to))
+
+
+neighbors2_vj_hm_same_pept$order <- 2
+
+vdjdb_tmp <- vdjdb_tmp %>% filter(!cdr3 %in% c(neighbors2_vj_hm_same_pept$cdr3.to, neighbors2_vj_hm_same_pept$cdr3.from))
+
+neighbors3_vj_hm_same_pept <- neighbors2_vj_hm_same_pept %>%
+  select(pdb.id, species, antigen.epitope.from, gene, v.segm.to, j.segm.to, cdr3.to) %>%
+  unique %>%
+  group_by(pdb.id, species, antigen.epitope.from, gene, v.segm.to, j.segm.to, cdr3.to) %>%
+  do(find_neighbours(.$pdb.id, .$species, .$antigen.epitope.from, .$gene, .$v.segm.to, .$j.segm.to, .$cdr3.to))
+
+
+neighbors3_vj_hm_same_pept$order <- 3
+```
+
+
+
+Combine data, make alignments (time-consuming) (same v- and j- genes) Hamming distance (1)
+```{r}
+neighbors_vj_hm_same_pept <- list(neighbors1_vj_hm_same_pept,
+                  neighbors2_vj_hm_same_pept,
+                  neighbors3_vj_hm_same_pept) %>%
+  rbindlist
+
+align_cdr3 <- function(cdr3.from = "CASSLGQAYEQYF",
+                       cdr3.to = "CASSIGQAAYEQYF") {
+  aln <- pairwiseAlignment(cdr3.from, cdr3.to)
+  data.frame(cdr3.from = cdr3.from,
+             cdr3.to = cdr3.to,
+             aa.from = strsplit(as.character(pattern(aln)), split = "")[[1]],
+             aa.to = strsplit(as.character(subject(aln)), split = "")[[1]],
+             stringsAsFactors = F) %>%
+    mutate(aa.pos = 0:(n() - 1)) %>%
+    filter(aa.from != aa.to)
+}
+
+align_cdr3()
+
+alns_same_pept <- neighbors_vj_hm_same_pept %>%
+  mutate(cdr3.pair = paste(cdr3.from, cdr3.to)) %>%
+  .$cdr3.pair %>%
+  unique %>%
+  strsplit(" ") %>%
+  mclapply(function(x) align_cdr3(x[1], x[2]), mc.cores = 80) %>%
+  rbindlist
+```
+
+Merge alignments, append PDB info (chain, residue sequential index, pdb index) (same v- j-genes) Hamming distance (1)  
+
+```{r}
+neighbors_vj_hm_same_pept <- neighbors_vj_hm_same_pept %>%
+  merge(alns_same_pept) %>%
+  merge(general_pdb %>%
+          filter(chain.component == "TCR") %>%
+          mutate(gene = chain.type) %>%
+          select(pdb.id, gene, chain.id) %>%
+          unique, by = c("pdb.id", "gene")) %>%
+  merge(markup_pdb %>%
+          filter(region.type == "CDR3") %>%
+          select(pdb.id, chain.id, region.start), by = c("pdb.id", "chain.id")) %>%
+  mutate(residue.index = region.start + aa.pos) %>%
+  merge(resmarkup_pdb %>%
+          select(pdb.id, chain.id, residue.index, residue.index.pdb, residue.ins.code),
+        by = c("pdb.id", "chain.id", "residue.index"))
+
+##
+
+neighbors.mut_vj_3aa_mhc_tcr_cdr3_HM_same_pept <- left_join(neighbors_vj_hm_same_pept, aa_dict %>% mutate(resn3 = resn3_list) %>% mutate(aa.from = resn1_list) %>% select(resn3, aa.from), by=c("aa.from")) %>% rename("resn3" = "aa.from.3") %>% left_join(aa_dict %>% mutate(resn3 = resn3_list) %>% mutate(aa.to = resn1_list) %>% select(resn3, aa.to), by=c("aa.to")) %>% rename("resn3" = "aa.to.3") %>% left_join(general_pdb %>% filter(chain.type == "MHCa") %>% mutate(mhc.alpha.chain = chain.id) %>% select(pdb.id, chain.id) %>% rename("chain.id" = "MHCa.chain") %>% merge(general_pdb %>% filter(chain.type == "MHCb") %>% select(pdb.id, chain.id), by = c("pdb.id")) %>% rename("chain.id" = "MHCb.chain"), by=c("pdb.id")) %>% left_join(general_pdb %>% filter(chain.type == "TRA") %>% mutate(TCR.alpha.chain = chain.id) %>% select(pdb.id, chain.id) %>% rename("chain.id" = "TRA.chain") %>% merge(general_pdb %>% filter(chain.type == "TRB") %>% select(pdb.id, chain.id), by = c("pdb.id")) %>% rename("chain.id" = "TRB.chain") %>% merge(general_pdb %>% filter(chain.type == "PEPTIDE") %>% select(pdb.id, chain.id), by = c("pdb.id")) %>% rename("chain.id" = "pept.chain"), by=c("pdb.id")) %>% left_join(pdb.annot %>% filter(gene == "TRA") %>% select(pdb.id, cdr3), by = c("pdb.id")) %>% rename("cdr3" = "cdr3.TRA.template") %>% left_join(pdb.annot %>% filter(gene == "TRB") %>% select(pdb.id, cdr3), by = c("pdb.id")) %>% rename("cdr3" = "cdr3.TRB.template")
+
+
+glimpse(neighbors.mut_vj_3aa_mhc_tcr_cdr3_HM_same_pept)
+
+neighbors.mut_vj_3aa_mhc_tcr_cdr3_HM_same_pept_sorted <- neighbors.mut_vj_3aa_mhc_tcr_cdr3_HM_same_pept[order(neighbors.mut_vj_3aa_mhc_tcr_cdr3_HM_same_pept$pdb.id, neighbors.mut_vj_3aa_mhc_tcr_cdr3_HM_same_pept$gene, neighbors.mut_vj_3aa_mhc_tcr_cdr3_HM_same_pept$order),]
+
+
+#Write output Pathway file 
+
+neighbors.mut_vj_3aa_mhc_tcr_cdr3_HM_same_pept_sorted %>% filter(antigen.epitope.from == antigen.epitope.to) %>% fwrite("neighbors.V_J_same_pept_sorted_example.txt", sep = "\t")
+
+```
+
+

@@ -1,6 +1,10 @@
 ### Mutator paper scripts
 
-This folder contains scripts post-analysis of modeled TCR-pMHC complexes for VDJdb records. For the actual settings and workflow used for modelling please refer to ``rosetta/`` folder.
+The original paper preprint is [here](https://www.biorxiv.org/content/10.1101/2023.03.29.533758v3.abstract).
+
+This folder contains scripts and R markdown notebooks for post-analysis of modeled TCR-pMHC complexes of VDJdb records. 
+
+For the actual settings and workflow used for modelling using [Rosetta](https://www.rosettacommons.org/software) please refer to ``rosetta/`` folder.
 
 This folder also contains the "pathways" file ``neighbors.mut_v_3aa_mhc_tcr_cdr3_HM_ONLY_same_pept_sorted_2022_04.txt`` indicating mutations to introduce in template PDB files and their order. It has the following columns: 
 
@@ -36,7 +40,4 @@ This folder also contains the "pathways" file ``neighbors.mut_v_3aa_mhc_tcr_cdr3
 30. cdr3.TRA.template: Sequence of the CDR3? in the Original template PDB
 31. cdr3.TRB.template: Sequence of the CDR3? in the Original template PDB
 
-
-
-
-
+This file is produced by script in the ``mutpathway/`` folder.
